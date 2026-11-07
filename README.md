@@ -1,4 +1,10 @@
+<p align="center"><img src="assets/icon.png" width="128" alt=""></p>
+
 # Burp Music Video Generator
+
+[![Tests](https://github.com/TechDaddyKB/burpMusicVideoGenerator/actions/workflows/tests.yml/badge.svg)](https://github.com/TechDaddyKB/burpMusicVideoGenerator/actions/workflows/tests.yml)
+[![CodeQL](https://github.com/TechDaddyKB/burpMusicVideoGenerator/actions/workflows/codeql.yml/badge.svg)](https://github.com/TechDaddyKB/burpMusicVideoGenerator/actions/workflows/codeql.yml)
+[![Latest release](https://img.shields.io/github/v/release/TechDaddyKB/burpMusicVideoGenerator)](https://github.com/TechDaddyKB/burpMusicVideoGenerator/releases/latest)
 
 **Have you ever wanted to make your favorite streamer's burps into a song? Well,
 try this.** At last, a practical answer to the question nobody at the conservatory
@@ -12,34 +18,73 @@ decision. Everybody wins.
 
 **From indigestion to orchestration.**
 
+## Download
+
+Grab the [latest release](https://github.com/TechDaddyKB/burpMusicVideoGenerator/releases/latest).
+No Python, no FFmpeg, no assembly required: everything it needs is in the box, like a
+burp waiting for its cue.
+
+| You're on | Get |
+| --- | --- |
+| Windows 10/11 | `…-windows-x64.zip`: unzip, run `burp-music-video-generator.exe` |
+| macOS (Apple silicon) | `…-macos-arm64.dmg`: drag to Applications |
+| Ubuntu, Debian, Mint, Pop!_OS | `…_amd64.deb` |
+| Any Linux | `…-linux-x64.AppImage` (one file), `.flatpak` (sandboxed) or `.tar.gz` (plain folder) |
+
+### Standard or TensorFlow edition?
+
+Every download comes in two flavors. **Most people want standard** (no `-tensorflow` in the name).
+
+| | Standard | TensorFlow |
+| --- | --- | --- |
+| Size | ~100 MB | ~500 MB to 1 GB |
+| Burp detector | Our NumPy copy of Google's YAMNet | Google's original TensorFlow YAMNet |
+| Same results? | Yes: same model and weights, scores within 0.0001 of TensorFlow's | It's the reference |
+| Detection on a GPU | No; the CPU does about a minute of video per second | Linux + NVIDIA GPU with CUDA 12 and cuDNN 9 installed; CPU elsewhere |
+| Video encoding on a GPU | Yes | Yes |
+
+Detection is rarely the slow part (downloading is), so the TensorFlow edition only
+pays off on a Linux box with an NVIDIA card chewing through a mountain of broadcasts.
+It's the same burp either way; one just arrives in a bigger truck.
+
+### First launch
+
+- **Windows** builds are code-signed. A brand-new release can still trigger SmartScreen's
+  "Windows protected your PC" until the signature earns some reputation: **More info** > **Run anyway**.
+- **macOS** builds aren't notarized yet. Right-click the app and choose **Open** the first
+  time (or allow it under System Settings > Privacy & Security).
+- **AppImage:** `chmod +x` it first. **Flatpak:** `flatpak install --user <file>`; needs Flathub for the runtime.
+
 ## How it works
 
 1. Lists the streamer's archived broadcasts (VODs) on Twitch, filtered by your dates.
 2. Downloads one VOD at a time.
-3. Finds burps with Google's [YAMNet](https://www.tensorflow.org/hub/tutorials/yamnet)
+3. Finds burps with Google's [YAMNet](https://www.kaggle.com/models/google/yamnet)
    sound classifier and saves each one as a short video clip. Burps are the
    default, but you can pick any of the 521 sounds YAMNet knows, or several.
-4. Deletes the full VOD once its clips are saved.
-5. Plays every MIDI note with the burp clip closest in length, pitch-shifted and
+4. Deletes the full VOD once its clips are saved. Your hard drive thanks you.
+5. Plays every MIDI note with the clip closest in length, pitch-shifted and
    stretched to fit, and saves the result as an MP4.
 
-## Requirements
+## The app
 
-- **Python 3.12**
-- **FFmpeg**, with the `rubberband` audio filter and `libx264` encoder
-  (check with `ffmpeg -filters | grep rubberband`)
-- Disk space for one full VOD at a time, plus the clips
-- A MIDI file. No songs or footage are included.
+Search for a streamer and click them, choose the sounds to detect (burps are already
+selected), optionally set a date range, drag the confidence slider, choose a MIDI file
+and where to save the video, then press **Make the video**. The log shows progress,
+and **Play video** opens the result.
 
-No API key or paid service is needed, and it runs on a CPU. YAMNet's weights
-download automatically the first time it looks for burps. Linux is the tested platform.
+Downloads save videos to your Videos folder (Movies on a Mac) and keep clips in your
+user data folder. Run from source, both go next to the code (`outputs/` and `burp-work/`).
 
-### GPU acceleration
+Streamer search uses Twitch's public website API, which Twitch could change. If
+search stops working, type the exact username and press Search to use it anyway.
 
-Video encoding uses your GPU automatically when FFmpeg can. At startup it tries
-these in order and uses the first that works, otherwise the CPU:
+## GPU acceleration
 
-| GPU | FFmpeg encoder |
+Video encoding uses your GPU automatically. At startup it test-encodes with each of
+these and uses the first that works, otherwise the CPU:
+
+| GPU | Encoder |
 | --- | --- |
 | NVIDIA | NVENC |
 | Intel | Quick Sync |
@@ -48,55 +93,29 @@ these in order and uses the first that works, otherwise the CPU:
 | AMD or Intel (Linux) | VAAPI |
 | Most others | Vulkan |
 
-Your FFmpeg build and GPU drivers must support the encoder; the log says which
-one was picked.
+The downloads include our own FFmpeg build ([build/ffmpeg/build.sh](build/ffmpeg/build.sh)) with
+every one of those, plus x264 and Rubber Band, and nothing else: no codecs it doesn't
+use, no network code. It loads your GPU driver at run time, so keep drivers current.
+**Use CPU only** in the app (or `--cpu-only`) skips the GPU.
 
-Burp detection uses TensorFlow, which runs YAMNet on the GPU if it can see one.
-For NVIDIA on Linux, install `pip install "tensorflow[and-cuda]"`. AMD needs
-TensorFlow's ROCm build and Apple needs `tensorflow-metal`. Otherwise detection
-runs on the CPU, which is fine: YAMNet is a small model.
+## Run from source
 
-## Setup
+Needs **Python 3.12** and **FFmpeg** with the `rubberband` filter and `libx264`
+(`ffmpeg -filters | grep rubberband`). Tkinter comes with Python from python.org,
+uv and Homebrew; on Debian/Ubuntu add `sudo apt-get install python3-tk`.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/burpMusicVideoGenerator.git
+git clone https://github.com/TechDaddyKB/burpMusicVideoGenerator.git
 cd burpMusicVideoGenerator
-```
-
-Install FFmpeg (`sudo apt-get install ffmpeg` on Ubuntu/Debian,
-`sudo pacman -S ffmpeg` on Arch), then the Python packages with
-[uv](https://docs.astral.sh/uv/getting-started/installation/):
-
-```bash
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -r requirements.txt
 source .venv/bin/activate
-```
-
-Or with plain pip:
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-## The app
-
-```bash
 python burp_gui.py
 ```
 
-Search for a streamer and click them, choose the sounds to detect (burps are
-already selected), optionally set a date range, drag the confidence slider, choose a MIDI file and where to save the video, then press
-**Make the video**. The log shows progress, and **Play video** opens the result.
-Videos are saved in the `outputs` folder by default.
-
-The app needs Tkinter, which comes with Python from python.org, uv and Homebrew.
-On Debian/Ubuntu, install it with `sudo apt-get install python3-tk`.
-
-Streamer search uses Twitch's public website API, which Twitch could change. If
-search stops working, type the exact username and press Search to use it anyway.
+For the TensorFlow detector, install `requirements-tensorflow.txt` instead
+(`tensorflow[and-cuda]` for NVIDIA GPUs on Linux). It downloads Google's YAMNet
+model once, about 17 MB, and checks it against a pinned checksum.
 
 ## Command line
 
@@ -107,6 +126,9 @@ python burp_song.py emmytheaxolotl --midi song.mid \
   --from-date 2026-10-01 --to-date 2026-10-31 \
   --output burp-symphony.mp4
 ```
+
+The Linux downloads take the same arguments:
+`burp-music-video-generator emmytheaxolotl --midi song.mid …`.
 
 Laughs and coughs instead of burps? Pick any sounds YAMNet knows. A moment counts
 if any of them is detected:
@@ -135,12 +157,14 @@ python burp_song.py emmytheaxolotl --midi another-song.mid --output encore.mp4
 | `--clips-dir DIR` | Use the MP4 clips in another folder instead of downloading. |
 | `--seconds N` | Render only the first N seconds, for a quick preview. |
 | `--work-dir DIR` | Where clips, the VOD being processed, and caches go (default `burp-work`). |
+| `--engine NAME` | `numpy`, `tensorflow`, or `auto` (TensorFlow if installed). |
 | `--cpu-only` | Encode video on the CPU even when a GPU encoder is available. |
 | `--cookies-from-browser NAME` | Use your browser's Twitch login, for subscriber-only VODs. |
 
 Only VODs still listed on the streamer's
 [archive page](https://www.twitch.tv/emmytheaxolotl/videos?filter=archives&sort=time)
-can be downloaded. Broadcasts that are still live are skipped.
+can be downloaded. Broadcasts that are still live are skipped; we don't burp-shame
+works in progress.
 
 ## Where things go
 
@@ -166,7 +190,7 @@ rendering. Keep the `clips` folder: it's what future songs are made from.
 ## Limitations
 
 - The detector sometimes mistakes voices or game audio for burps, and scores are
-  not true probabilities.
+  not true probabilities. Science marches on; so does indigestion.
 - Each clip gets one estimated pitch, so a wandering burp stays a wandering burp.
 - Big pitch shifts or stretches can sound rough.
 - MIDI drums (channel 10) are skipped, and instrument sounds, pitch bends and
@@ -175,6 +199,15 @@ rendering. Keep the `clips` folder: it's what future songs are made from.
 
 This is a burp orchestra, not the Vienna Philharmonic with a stomach ache.
 
+## Security and updates
+
+- **CodeQL** scans the Python code and the workflows on every push and weekly.
+- **Dependabot** opens pull requests for outdated Python packages and GitHub Actions,
+  and security alerts as soon as an advisory is published.
+- **pip-audit** checks every dependency for known vulnerabilities on every push, and
+  again before each release is built: a vulnerable package stops the release.
+- The FFmpeg sources, YAMNet model and GitHub Actions are pinned by SHA-256 or commit.
+
 ## Tests
 
 ```bash
@@ -182,15 +215,19 @@ python -m unittest discover -v
 ```
 
 The tests use generated audio and video, a stand-in for YAMNet and fake Twitch
-responses, so they make no network requests. GitHub Actions runs them on every
+responses, so they make no network requests. With TensorFlow installed they also
+check that the NumPy YAMNet matches TensorFlow's. GitHub Actions runs them on every
 push. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Credits
 
-Built with [yt-dlp](https://github.com/yt-dlp/yt-dlp), YAMNet, FFmpeg and
-Rubber Band, NumPy, SciPy, Mido, and OpenCV, which keep their own licenses.
-`yamnet_sounds.txt` lists YAMNet's sound classes, from the
+Built with [yt-dlp](https://github.com/yt-dlp/yt-dlp), FFmpeg, x264, Rubber Band,
+NumPy, SciPy, Pillow and Mido, which keep their own licenses. The bundled FFmpeg is
+GPL; its exact sources are listed in `ffmpeg/SOURCES.txt` in each download.
+YAMNet and its weights (`yamnet_weights.npz`) are by Google, under the Apache License
+2.0; `yamnet_sounds.txt` lists its sound classes from the
 [AudioSet ontology](https://research.google.com/audioset/ontology/index.html).
+
 Bring your own MIDI and footage you can use. Bring your own sense of humor, too;
 we spent the entire budget on the bass section.
 

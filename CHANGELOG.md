@@ -1,7 +1,24 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-11-07
 
+- Release downloads for Windows (zip, code-signed), macOS (dmg, Apple silicon) and
+  Linux (tar.gz, AppImage, .deb, Flatpak) that need no Python or FFmpeg installed,
+  in two editions: standard (NumPy YAMNet) and TensorFlow.
+- Bundle a purpose-built FFmpeg (`build/ffmpeg/build.sh`): only the formats, codecs
+  and filters the app uses, plus NVENC, AMF, Quick Sync, VAAPI, Vulkan, D3D11/DXVA2
+  or VideoToolbox depending on the platform.
+- Add `yamnet_numpy.py`, YAMNet on NumPy with Google's weights; it matches
+  TensorFlow's scores within 0.0001. TensorFlow is now optional
+  (`requirements-tensorflow.txt`, `--engine`); `tensorflow-hub` is no longer used.
+- Replace OpenCV with Pillow (much smaller downloads); require Pillow 13 for its
+  security fixes.
+- Add an app icon, CodeQL scanning, Dependabot, and pip-audit checks that block
+  releases with vulnerable dependencies.
+- Packaged builds save videos to the user's Videos/Movies folder and keep clips in
+  the user's data folder. FFmpeg no longer flashes console windows on Windows, and
+  render failures report FFmpeg's error.
+- Downloads are remuxed to MP4 with yt-dlp's native HLS downloader.
 - Detect any of YAMNet's 521 sounds, or several at once, instead of only burps
   (still the default): `--sound NAME` (repeatable), `--list-sounds`, and a
   searchable multi-select list in the app. Clips are now stored per sound choice

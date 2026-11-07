@@ -1,0 +1,19 @@
+# Dependabot version updates: weekly pull requests, minor and patch updates grouped.
+# Security updates for vulnerable dependencies arrive as soon as an advisory is published.
+# The FFmpeg sources pinned in build/ffmpeg/build.sh aren't covered; see CONTRIBUTING.md.
+version: 2
+
+updates:
+  - package-ecosystem: pip
+    directory: /   # requirements.txt, requirements-tensorflow.txt, requirements-build.txt
+    schedule: { interval: weekly }
+    groups:
+      pip-minor:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions:
+        update-types: [minor, patch]

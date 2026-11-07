@@ -22,9 +22,29 @@ import urllib.request
 
 import burp_song as bs
 
-HERE = Path(__file__).resolve().parent
-WORK_DIR = HERE/'burp-work'
-OUTPUT_DIR = HERE/'outputs'
+APP_NAME = 'Burp Music Video Generator'
+
+
+def user_folders():
+    """(work folder, video folder). Next to the code when run from source; the user's own folders
+    in packaged builds, whose install folder may be read-only."""
+    if not getattr(sys, 'frozen', False):
+        here = Path(__file__).resolve().parent
+        return here/'burp-work', here/'outputs'
+    home = Path.home()
+    if sys.platform.startswith('win'):
+        data = Path(os.environ.get('LOCALAPPDATA', home/'AppData'/'Local'))/APP_NAME
+        videos = home/'Videos'
+    elif sys.platform == 'darwin':
+        data = home/'Library'/'Application Support'/APP_NAME
+        videos = home/'Movies'
+    else:
+        data = Path(os.environ.get('XDG_DATA_HOME', home/'.local'/'share'))/'burp-music-video-generator'
+        videos = Path(os.environ.get('XDG_VIDEOS_DIR', home/'Videos'))
+    return data/'work', videos/APP_NAME
+
+
+WORK_DIR, OUTPUT_DIR = user_folders()
 
 
 def build_argv(username, from_date, to_date, confidence, midi, output, download_all=False, cpu_only=False,
@@ -92,7 +112,11 @@ class App:
         self.images = {}
         self.running = False
         self.output = None
-        root.title('Burp Music Video Generator')
+        root.title(APP_NAME)
+        icon = Path(__file__).resolve().parent/'assets'/'icon.png'
+        if icon.is_file():
+            self.icon = tk.PhotoImage(file=str(icon))
+            root.iconphoto(True, self.icon)
         root.minsize(620, 820)
         root.geometry('720x960')
         style = ttk.Style(root)

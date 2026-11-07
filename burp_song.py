@@ -25,7 +25,7 @@ import subprocess
 import sys
 import tempfile
 
-import cv2
+from PIL import Image
 import mido
 import numpy as np
 from scipy import signal
@@ -34,7 +34,9 @@ from scipy.io import wavfile
 LOG = logging.getLogger('burp_song')
 
 # Detection (YAMNet works on 16 kHz mono audio, scoring 0.975 s windows every 0.48 s).
-YAMNET_URL = 'https://tfhub.dev/google/yamnet/1'
+# Google's YAMNet SavedModel for the TensorFlow engine (Apache 2.0), pinned by checksum.
+YAMNET_URL = 'https://tfhub.dev/google/yamnet/1?tf-hub-format=compressed'
+YAMNET_SHA256 = 'b80da2a1a56926fb0767205051a200dd7b3beaf3ea1ea126c42a53943996e5e0'
 DEFAULT_SOUND = 'Burping, eructation'
 SOUNDS_FILE = Path(__file__).with_name('yamnet_sounds.txt')  # YAMNet's class names, in order
 DETECT_RATE = 16000
@@ -49,8 +51,12 @@ WIDTH, HEIGHT, FPS = 1280, 720, 30
 TILE_W, TILE_H = 640, 360
 
 
+# On Windows, keep ffmpeg from flashing a console window over the app.
+NO_WINDOW = {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+
+
 def run(cmd, **kwargs):
-    result = subprocess.run(cmd, stderr=subprocess.PIPE, **kwargs)
+    result = subprocess.run(cmd, stderr=subprocess.PIPE, **NO_WINDOW, **kwargs)
     if result.returncode:
         error = result.stderr.decode(errors='replace')[-3000:]
         raise RuntimeError(f'{cmd[0]} failed ({result.returncode}): {error}')
@@ -97,7 +103,7 @@ def pick_encoder(choice='auto'):
                     '-i', 'color=c=black:size=320x240:rate=30:duration=0.2',
                     '-vf', option['filter'], *option['args'], '-f', 'null', '-']
             try:
-                if subprocess.run(test, capture_output=True, timeout=20).returncode == 0:
+                if subprocess.run(test, capture_output=True, timeout=20, **NO_WINDOW).returncode == 0:
                     _encoder = option
                     break
             except (OSError, subprocess.TimeoutExpired):
@@ -173,7 +179,7 @@ def download_vod(vod, folder, cookies_from_browser=None):
     # Clips are rendered at 720p, so a bigger download only wastes time and disk.
     options = ydl_options(cookies_from_browser, quiet=False, noplaylist=True,
                           format='best[height<=720]/bv*[height<=720]+ba/best',
-                          merge_output_format='mkv', continuedl=True,
+                          merge_output_format='mp4', continuedl=True, hls_prefer_native=True,
                           outtmpl=str(folder/f"{vod['id']}.%(ext)s"))
     with YoutubeDL(options) as ydl:
         if ydl.download([vod['url']]) != 0:
@@ -210,26 +216,69 @@ def sounds_folder(sounds):
 
 
 _model = None
+ENGINES = ('auto', 'numpy', 'tensorflow')
+# The TensorFlow edition bundles YAMNet here; otherwise it's downloaded once into the user's cache.
+BUNDLED_SAVEDMODEL = Path(__file__).with_name('yamnet_savedmodel')
 
 
-def load_yamnet():
-    """Load YAMNet once (weights download on first use). Returns (model, sound names)."""
+def yamnet_savedmodel():
+    """Folder holding Google's YAMNet SavedModel, downloading and checking it the first time."""
+    if BUNDLED_SAVEDMODEL.is_dir():
+        return BUNDLED_SAVEDMODEL
+    cache = Path(os.environ.get('XDG_CACHE_HOME', Path.home()/'.cache'))/'burp-music-video-generator'
+    folder = cache/'yamnet_savedmodel'
+    if not (folder/'saved_model.pb').is_file():
+        import tarfile
+        import urllib.request
+        LOG.info('Downloading YAMNet for TensorFlow (about 17 MB, once)')
+        cache.mkdir(parents=True, exist_ok=True)
+        archive = cache/'yamnet.tar.gz'
+        with urllib.request.urlopen(YAMNET_URL, timeout=60) as response:
+            archive.write_bytes(response.read())
+        if hashlib.sha256(archive.read_bytes()).hexdigest() != YAMNET_SHA256:
+            archive.unlink()
+            raise RuntimeError('The downloaded YAMNet model does not match its checksum; try again later')
+        with tarfile.open(archive) as tar:
+            tar.extractall(folder, filter='data')
+        archive.unlink()
+    return folder
+
+
+def tensorflow_installed():
+    import importlib.util
+    return importlib.util.find_spec('tensorflow') is not None
+
+
+def engine_name(engine='auto'):
+    """Which detector 'auto' means here: TensorFlow if it's installed, otherwise NumPy."""
+    if engine == 'auto':
+        return 'tensorflow' if tensorflow_installed() else 'numpy'
+    return engine
+
+
+def load_yamnet(engine='auto'):
+    """Load YAMNet once. Returns (score function, sound names).
+
+    The score function takes 16 kHz mono audio and returns a (frames, 521) array.
+    'numpy' is the built-in copy (yamnet_numpy.py); 'tensorflow' is Google's original,
+    which can use an NVIDIA GPU when TensorFlow finds CUDA.
+    """
     global _model
     if _model is None:
-        import csv
-        os.environ.setdefault('TF_USE_LEGACY_KERAS', '1')
-        os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')
-        import tensorflow as tf
-        import tensorflow_hub as hub
-        gpus = tf.config.list_physical_devices('GPU')
-        for gpu in gpus:
-            # Take GPU memory as needed, leaving room for the video encoder.
-            tf.config.experimental.set_memory_growth(gpu, True)
-        LOG.info('Loading YAMNet on %s', 'the GPU' if gpus else 'the CPU')
-        model = hub.load(YAMNET_URL)
-        with open(model.class_map_path().numpy().decode(), encoding='utf-8') as f:
-            names = [row['display_name'] for row in csv.DictReader(f)]
-        _model = model, names
+        if engine_name(engine) == 'tensorflow':
+            os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')
+            import tensorflow as tf
+            gpus = tf.config.list_physical_devices('GPU')
+            for gpu in gpus:
+                # Take GPU memory as needed, leaving room for the video encoder.
+                tf.config.experimental.set_memory_growth(gpu, True)
+            LOG.info('Loading YAMNet (TensorFlow) on %s', 'the GPU' if gpus else 'the CPU')
+            model = tf.saved_model.load(str(yamnet_savedmodel()))
+            _model = (lambda waveform: model(waveform)[0].numpy()), sound_names()
+        else:
+            from yamnet_numpy import YAMNet
+            LOG.info('Loading YAMNet (built-in NumPy copy) on the CPU')
+            _model = YAMNet(), sound_names()
     return _model
 
 
@@ -245,7 +294,7 @@ def sound_scores(video, model, class_indices, chunk_seconds=60):
            '-ac', '1', '-ar', str(DETECT_RATE), '-f', 'f32le', '-']
     scores, buffer = [], np.empty(0, np.float32)
     with tempfile.TemporaryFile() as err:
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=err, **NO_WINDOW)
         try:
             while True:
                 wanted = chunk+lookahead-len(buffer)
@@ -257,7 +306,7 @@ def sound_scores(video, model, class_indices, chunk_seconds=60):
                 frames = math.ceil(len(buffer)/HOP_SAMPLES) if last else chunk//HOP_SAMPLES
                 needed = (frames-1)*HOP_SAMPLES+WINDOW_SAMPLES
                 waveform = np.pad(buffer, (0, max(0, needed-len(buffer))))
-                result = np.asarray(model(waveform)[0].numpy())[:frames][:, class_indices].max(axis=1)
+                result = np.asarray(model(waveform))[:frames][:, class_indices].max(axis=1)
                 scores.extend(float(s) for s in result)
                 LOG.info('%s: scanned %.0f minutes', video.name, len(scores)*HOP_SECONDS/60)
                 if last:
@@ -298,7 +347,8 @@ def cut_clip(video, start, end, target, encoder=CPU_ENCODER):
     temp.replace(target)
 
 
-def process_vod(vod, root, confidence, sounds=(DEFAULT_SOUND,), cookies_from_browser=None, encoder=CPU_ENCODER):
+def process_vod(vod, root, confidence, sounds=(DEFAULT_SOUND,), cookies_from_browser=None, encoder=CPU_ENCODER,
+                engine='auto'):
     """Download one VOD, save clips of the chosen sounds, then delete the VOD. Returns the clips."""
     folder = root/'clips'/sounds_folder(sounds)/vod['id']
     done = folder/'done.json'
@@ -307,7 +357,7 @@ def process_vod(vod, root, confidence, sounds=(DEFAULT_SOUND,), cookies_from_bro
         return existing_clips(folder)
     LOG.info('Processing %s %s %s', vod['date'], vod['url'], vod['title'])
     video = download_vod(vod, root/'vods', cookies_from_browser)
-    model, names = load_yamnet()
+    model, names = load_yamnet(engine)
     found = find_sounds(sound_scores(video, model, [names.index(s) for s in sounds]), confidence)
     LOG.info('%s: found %d clips of %s', vod['id'], len(found), ', '.join(sounds))
     clips = []
@@ -484,7 +534,7 @@ def render_video(notes, clips, audio_path, output, seconds, cache, encoder=CPU_E
            '-i', str(audio_path), '-map', '0:v', '-map', '1:a', '-vf', encoder['filter'], *encoder['args'],
            '-c:a', 'aac', '-b:a', '192k', '-t', f'{seconds:.3f}', '-movflags', '+faststart', str(output)]
     with tempfile.TemporaryFile() as err:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=err)
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=err, **NO_WINDOW)
         try:
             active, cursor = [], 0
             for frame in range(math.ceil(seconds*FPS)):
@@ -510,11 +560,17 @@ def render_video(notes, clips, audio_path, output, seconds, cache, encoder=CPU_E
                     scale = min((x1-x0)/TILE_W, (y1-y0)/TILE_H)
                     w, h = max(1, int(TILE_W*scale)), max(1, int(TILE_H*scale))
                     x, y = x0+(x1-x0-w)//2, y0+(y1-y0-h)//2
-                    canvas[y:y+h, x:x+w] = cv2.resize(image, (w, h))
-                proc.stdin.write(canvas.tobytes())
+                    canvas[y:y+h, x:x+w] = np.asarray(Image.fromarray(image).resize((w, h), Image.BILINEAR))
+                try:
+                    proc.stdin.write(canvas.tobytes())
+                except BrokenPipeError:
+                    break  # ffmpeg stopped early; its exit code and message are reported below
                 if frame % (FPS*10) == 0:
                     LOG.info('Video %.0f / %.0f seconds', t, seconds)
-            proc.stdin.close()
+            try:
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass
             if proc.wait():
                 err.seek(0)
                 raise RuntimeError(f'ffmpeg failed: {err.read().decode(errors="replace")[-3000:]}')
@@ -586,6 +642,9 @@ def parse_args(argv=None):
     p.add_argument('--work-dir', type=Path, default=Path('burp-work'),
                    help='Where clips, temporary VODs and caches go (default: burp-work)')
     p.add_argument('--seconds', type=float, help='Render only the first N seconds of the song, for a preview')
+    p.add_argument('--engine', choices=ENGINES, default='auto',
+                   help='Sound detector: the built-in NumPy copy of YAMNet, or TensorFlow '
+                        '(auto: TensorFlow if installed)')
     p.add_argument('--cpu-only', action='store_true',
                    help='Encode video on the CPU even if a GPU encoder is available')
     p.add_argument('--cookies-from-browser', choices=['firefox', 'chrome', 'chromium', 'brave', 'opera', 'edge'],
@@ -613,6 +672,8 @@ def parse_args(argv=None):
         p.error('--from-date must be on or before --to-date')
     if args.seconds is not None and args.seconds <= 0:
         p.error('--seconds must be positive')
+    if args.engine == 'tensorflow' and not tensorflow_installed():
+        p.error('--engine tensorflow needs TensorFlow (pip install -r requirements-tensorflow.txt)')
     if args.clips_dir and (args.from_date or args.to_date or args.all):
         p.error('--clips-dir uses existing clips; leave out --from-date, --to-date and --all')
     return args
@@ -635,7 +696,8 @@ def main(argv=None):
         LOG.info('Found %d broadcasts', len(vods))
         clips = []
         for vod in vods:
-            clips += process_vod(vod, root, args.confidence, args.sounds, args.cookies_from_browser, encoder)
+            clips += process_vod(vod, root, args.confidence, args.sounds, args.cookies_from_browser, encoder,
+                                 args.engine)
     else:
         clips = existing_clips(library)
         LOG.info('Using %d existing clips from %s', len(clips), library)

@@ -7,8 +7,14 @@ venv/
 .mypy_cache/
 .ruff_cache/
 *.egg-info/
-build/
 dist/
+# Release build leftovers (build/ itself holds the build scripts)
+pyinstaller-work/
+ffmpeg-dist/
+yamnet_savedmodel/
+yamnet.tar.gz
+/out/
+/check/
 .coverage
 coverage.xml
 htmlcov/
@@ -33,6 +39,7 @@ htmlcov/
 *.part
 *.ytdl
 *.npz
+!yamnet_weights.npz
 *.npy
 *.csv
 *.log

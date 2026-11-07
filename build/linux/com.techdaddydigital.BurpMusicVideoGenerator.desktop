@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Burp Music Video Generator
+GenericName=Music Video Maker
+Comment=Turn a Twitch streamer's burps into a music video
+Exec=burp-music-video-generator
+Icon=com.techdaddydigital.BurpMusicVideoGenerator
+Terminal=false
+Categories=AudioVideo;Video;Audio;
+Keywords=twitch;burp;midi;music;video;
+StartupWMClass=Burp Music Video Generator

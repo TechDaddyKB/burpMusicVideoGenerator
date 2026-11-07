@@ -14,14 +14,6 @@ from scipy.io import wavfile
 import burp_song as bs
 
 
-class FakeScores:
-    def __init__(self, data):
-        self.data = data
-
-    def numpy(self):
-        return self.data
-
-
 BURP = 53  # 'Burping, eructation' in YAMNet's list
 COUGH = 42
 
@@ -31,7 +23,7 @@ def constant_model(audio):
     count = max(0, 1+(len(audio)-bs.WINDOW_SAMPLES)//bs.HOP_SAMPLES)
     scores = np.zeros((count, 521))
     scores[:, BURP], scores[:, COUGH] = .9, .2
-    return FakeScores(scores), None, None
+    return scores
 
 
 def save_midi(path, *tracks):
@@ -229,6 +221,42 @@ class TwitchTests(FixtureTest):
                 bs.process_vod(self.vod(), root, .35)
         self.assertTrue((root/'vods'/'123.mp4').exists())
         self.assertFalse((root/'clips'/'burping-eructation'/'123'/'done.json').exists())
+
+
+class YamnetNumpyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from yamnet_numpy import YAMNet
+        cls.model = YAMNet()
+        cls.names = bs.sound_names()
+
+    def top(self, waveform, count=3):
+        scores = self.model(waveform.astype(np.float32))
+        self.assertEqual(scores.shape[1], 521)
+        mean = scores.mean(axis=0)
+        return [self.names[i] for i in mean.argsort()[::-1][:count]]
+
+    def test_recognizes_silence_and_a_tone(self):
+        seconds = np.arange(3*16000)/16000
+        self.assertEqual(self.top(np.zeros(len(seconds)), 1), ['Silence'])
+        self.assertIn('Dial tone', self.top(.5*np.sin(2*np.pi*440*seconds)))
+
+    def test_one_row_per_hop_like_yamnet(self):
+        for samples, rows in ((100, 1), (15600, 1), (15601, 2), (15600+7680*4, 5)):
+            self.assertEqual(len(self.model(np.zeros(samples, np.float32))), rows)
+
+    @unittest.skipUnless(bs.tensorflow_installed(), 'TensorFlow not installed')
+    def test_matches_tensorflow(self):
+        bs._model = None
+        try:
+            tensorflow_model, _ = bs.load_yamnet('tensorflow')
+        finally:
+            bs._model = None
+        rng = np.random.default_rng(1)
+        seconds = np.arange(5*16000)/16000
+        for waveform in (rng.normal(0, .1, 40000), .3*np.sin(2*np.pi*(200+100*seconds)*seconds)):
+            waveform = waveform.astype(np.float32)
+            np.testing.assert_allclose(self.model(waveform), tensorflow_model(waveform), atol=5e-4)
 
 
 class EncoderTests(unittest.TestCase):

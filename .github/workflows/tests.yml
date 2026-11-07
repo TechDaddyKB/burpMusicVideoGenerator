@@ -2,6 +2,7 @@ name: Tests
 
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -12,9 +13,6 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      CUDA_VISIBLE_DEVICES: "-1"
-      TF_CPP_MIN_LOG_LEVEL: "3"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -34,3 +32,38 @@ jobs:
         run: python -m pip check
       - name: Test
         run: python -m unittest discover -v
+
+  # The TensorFlow engine and the check that the NumPy copy of YAMNet matches it.
+  test-tensorflow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CUDA_VISIBLE_DEVICES: "-1"
+      TF_CPP_MIN_LOG_LEVEL: "3"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-tensorflow.txt
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: python -m pip install -r requirements-tensorflow.txt
+      - name: Test
+        run: python -m unittest -v test_burp_song.YamnetNumpyTests
+
+  # Known vulnerabilities in any dependency fail the build (the release workflow checks again).
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -r requirements-build.txt
+      - run: pip-audit --strict -r requirements.txt -r requirements-build.txt
+      - run: pip-audit --strict -r requirements-tensorflow.txt

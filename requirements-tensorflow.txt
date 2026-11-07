@@ -1,0 +1,5 @@
+# Optional: run sound detection with Google's TensorFlow YAMNet instead of the
+# built-in NumPy copy. On Linux it can use an NVIDIA GPU; for that install
+# "tensorflow[and-cuda]" instead of tensorflow.
+-r requirements.txt
+tensorflow>=2.16,<2.19

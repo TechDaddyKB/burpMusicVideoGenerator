@@ -1,0 +1,257 @@
+name: Release
+
+# Builds the downloads for Windows, macOS and Linux in two editions:
+#   standard   - the built-in NumPy copy of YAMNet; small.
+#   tensorflow - Google's TensorFlow YAMNet; large, and on Linux it can use an NVIDIA GPU (CUDA).
+# Every build bundles the app's own FFmpeg (build/ffmpeg/build.sh), so users need nothing else installed.
+# Pushing a v* tag publishes a GitHub release; running it by hand only builds the files (as workflow artifacts).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: '3.12'
+  # Google's YAMNet SavedModel for the TensorFlow edition (Apache 2.0), pinned by checksum.
+  YAMNET_URL: https://tfhub.dev/google/yamnet/1?tf-hub-format=compressed
+  YAMNET_SHA256: b80da2a1a56926fb0767205051a200dd7b3beaf3ea1ea126c42a53943996e5e0
+
+jobs:
+  # Refuse to package Python dependencies with known vulnerabilities.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: python -m pip install -r requirements-build.txt
+      - name: Audit standard edition dependencies
+        run: pip-audit --strict -r requirements.txt -r requirements-build.txt
+      - name: Audit TensorFlow edition dependencies
+        run: pip-audit --strict -r requirements-tensorflow.txt
+
+  ffmpeg:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64, os: ubuntu-22.04 }   # oldest supported glibc, so it runs on more distros
+          - { target: win-x64, os: ubuntu-24.04 }     # cross-built with mingw-w64
+          - { target: osx-arm64, os: macos-14 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - id: cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: artifacts/ffmpeg/${{ matrix.target }}
+          key: ffmpeg-${{ matrix.target }}-${{ hashFiles('build/ffmpeg/build.sh') }}
+      - name: Install build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo apt-get update
+            sudo apt-get install -y nasm ninja-build cmake pkg-config patchelf gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+            # libvpl uses C++ threads, which need mingw's POSIX thread model.
+            sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+            sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+            pipx install meson
+          else
+            brew install nasm meson ninja cmake pkg-config
+          fi
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: build/ffmpeg/build.sh ${{ matrix.target }} artifacts/ffmpeg/${{ matrix.target }}
+      - name: Check that it runs
+        if: matrix.target != 'win-x64'
+        run: |
+          f=artifacts/ffmpeg/${{ matrix.target }}/ffmpeg
+          $f -hide_banner -version | head -1
+          $f -hide_banner -encoders | grep -E 'libx264|h264_'
+          $f -hide_banner -filters | grep rubberband
+          $f -v error -f lavfi -i color=size=320x240:duration=0.5 -f lavfi -i sine=duration=0.5 \
+             -vf format=yuv420p -c:v libx264 -c:a aac -shortest check.mp4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          retention-days: 7
+          name: ffmpeg-${{ matrix.target }}
+          path: artifacts/ffmpeg/${{ matrix.target }}
+
+  app:
+    needs: [audit, ffmpeg]
+    strategy:
+      fail-fast: false
+      matrix:
+        edition: [standard, tensorflow]
+        platform: [linux, windows, macos]
+        include:
+          - { platform: linux, os: ubuntu-22.04, ffmpeg: linux-x64 }
+          - { platform: windows, os: windows-latest, ffmpeg: win-x64 }
+          - { platform: macos, os: macos-14, ffmpeg: osx-arm64 }
+    runs-on: ${{ matrix.os }}
+    # Windows code signing (Azure Artifact Signing) trusts only this repository's "signing" environment,
+    # which only release tags may use.
+    environment: ${{ matrix.platform == 'windows' && startsWith(github.ref, 'refs/tags/v') && 'signing' || '' }}
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v=${GITHUB_REF#refs/tags/v}; else v=0.0.0-dev; fi
+          echo "APP_VERSION=$v" >> "$GITHUB_ENV"
+          [ ${{ matrix.edition }} = tensorflow ] && s=-tensorflow || s=
+          echo "SUFFIX=$s" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: ffmpeg-${{ matrix.ffmpeg }}
+          path: ffmpeg-dist
+      - name: Restore ffmpeg permissions
+        run: chmod +x ffmpeg-dist/ffmpeg* ffmpeg-dist/ffprobe*
+      - name: Install Python packages
+        run: |
+          if [ ${{ matrix.edition }} = tensorflow ]; then req=requirements-tensorflow.txt; else req=requirements.txt; fi
+          python -m pip install -r "$req" -r requirements-build.txt
+      - name: Bundle YAMNet for TensorFlow
+        if: matrix.edition == 'tensorflow'
+        run: |
+          curl -fsSL --retry 3 -o yamnet.tar.gz "$YAMNET_URL"
+          echo "$YAMNET_SHA256  yamnet.tar.gz" | shasum -a 256 -c -
+          mkdir yamnet_savedmodel && tar -xzf yamnet.tar.gz -C yamnet_savedmodel
+      - name: Build the app
+        env:
+          EDITION: ${{ matrix.edition }}
+          FFMPEG_DIR: ${{ github.workspace }}/ffmpeg-dist
+        run: pyinstaller --noconfirm --distpath dist --workpath pyinstaller-work build/burp.spec
+      - name: Check the built app
+        run: |
+          case ${{ matrix.platform }} in
+            macos) app="dist/Burp Music Video Generator.app/Contents/MacOS/burp-music-video-generator" ;;
+            windows) app=dist/burp-music-video-generator/burp-music-video-generator.exe ;;
+            *) app=dist/burp-music-video-generator/burp-music-video-generator ;;
+          esac
+          mkdir -p check/clips
+          ffmpeg-dist/ffmpeg -v error -f lavfi -i color=c=green:size=320x240:duration=1 -f lavfi -i sine=frequency=220:duration=1 \
+            -vf format=yuv420p -c:v libx264 -c:a aac -shortest check/clips/clip-0001.mp4
+          python -c "import mido; m=mido.MidiFile(); t=mido.MidiTrack(); m.tracks.append(t); t+= [mido.Message('note_on', note=60), mido.Message('note_off', note=60, time=480)]; m.save('check/song.mid')"
+          "$app" checkstreamer --midi check/song.mid --clips-dir check/clips --work-dir check/work --output check/song.mp4 --sound Cough
+          ffmpeg-dist/ffprobe -v error -show_entries format=duration -of csv=p=0 check/song.mp4
+      - name: Check the app window opens
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update && sudo apt-get install -y xvfb
+          status=0; timeout 20 xvfb-run -a dist/burp-music-video-generator/burp-music-video-generator || status=$?
+          [ "$status" = 124 ] || { echo "the app exited ($status) instead of staying open"; exit 1; }
+
+      # --- Windows: sign, then zip ---------------------------------------------------------------
+      - name: Azure login
+        if: matrix.platform == 'windows' && vars.AZURE_SIGNING_ACCOUNT != '' && startsWith(github.ref, 'refs/tags/v')
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: List files to sign
+        id: sign-list
+        if: matrix.platform == 'windows' && vars.AZURE_SIGNING_ACCOUNT != '' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $d = "dist/burp-music-video-generator"
+          $files = @("$d/burp-music-video-generator.exe") + @(Get-ChildItem "$d/_internal/ffmpeg" -Filter *.exe | ForEach-Object FullName)
+          "files=$((($files | ForEach-Object { (Resolve-Path $_).Path }) -join ','))" >> $env:GITHUB_OUTPUT
+      - name: Sign with Azure Artifact Signing
+        if: steps.sign-list.outcome == 'success'
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files: ${{ steps.sign-list.outputs.files }}
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: Burp Music Video Generator
+          description-url: https://github.com/TechDaddyKB/burpMusicVideoGenerator
+      - name: Check the signature
+        if: steps.sign-list.outcome == 'success'
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature dist/burp-music-video-generator/burp-music-video-generator.exe
+          "$($sig.Status): $($sig.SignerCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') { throw "burp-music-video-generator.exe is not validly signed" }
+      - name: Package (Windows)
+        if: matrix.platform == 'windows'
+        run: |
+          mkdir -p out
+          cd dist && 7z a -tzip -mx=7 "../out/burp-music-video-generator-$APP_VERSION-windows-x64$SUFFIX.zip" burp-music-video-generator >/dev/null
+
+      # --- macOS: disk image -------------------------------------------------------------------------
+      - name: Package (macOS)
+        if: matrix.platform == 'macos'
+        run: |
+          mkdir -p out dmg
+          cp -R "dist/Burp Music Video Generator.app" dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "Burp Music Video Generator" -srcfolder dmg -ov -format UDZO \
+            "out/burp-music-video-generator-$APP_VERSION-macos-arm64$SUFFIX.dmg"
+
+      # --- Linux: tar.gz, AppImage, .deb, Flatpak -----------------------------------------------------
+      - name: Package (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          rm -rf pyinstaller-work   # disk space: the TensorFlow edition is large
+          build/linux/package.sh dist/burp-music-video-generator "$APP_VERSION" ${{ matrix.edition }} out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          retention-days: 7
+          name: release-${{ matrix.platform }}-${{ matrix.edition }}
+          path: out/*
+          compression-level: 0
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: app
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-*
+          path: files
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          (cd files && sha256sum * > SHA256SUMS.txt)
+          sed "s/{{VERSION}}/${TAG#v}/g" build/release-notes.md > notes.md
+          gh release create "$TAG" files/* --repo "$GITHUB_REPOSITORY" --title "Burp Music Video Generator $TAG" --notes-file notes.md
