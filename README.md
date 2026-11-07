@@ -152,6 +152,7 @@ python burp_song.py emmytheaxolotl --midi another-song.mid --output encore.mp4
 | `--from-date`, `--to-date` | Only download broadcasts that started in this range (`YYYY-MM-DD`, UTC, inclusive). Either one can be used alone. |
 | `--sound NAME` | A sound to detect, repeatable (default `"Burping, eructation"`). Names ignore case. |
 | `--list-sounds` | Print every sound you can detect. |
+| `--search NAME` | Search Twitch for channels by name, then exit. |
 | `--confidence N` | How sure the detector must be, from 0 to 1 (default `.35`). Higher means fewer, surer clips. Other sounds may need a different value. |
 | `--all` | Without dates, download the whole archive even when clips already exist. |
 | `--clips-dir DIR` | Use the MP4 clips in another folder instead of downloading. |

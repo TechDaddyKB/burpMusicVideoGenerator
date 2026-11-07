@@ -366,6 +366,21 @@ class CommandLineTests(FixtureTest):
             bs.parse_args(['--list-sounds'])
         self.assertIn('Burping, eructation', ''.join(c.args[0] for c in out.write.call_args_list))
 
+    def test_search_prints_channels_without_other_arguments(self):
+        channels = [dict(login='emmytheaxolotl', name='emmytheaxolotl', image=None, followers=4573, live=False)]
+        with patch.object(bs, 'search_channels', return_value=channels) as search, \
+             patch('sys.stdout') as out, self.assertRaises(SystemExit):
+            bs.parse_args(['--search', 'emmy'])
+        search.assert_called_once_with('emmy')
+        self.assertIn('4,573 followers', ''.join(c.args[0] for c in out.write.call_args_list))
+
+    def test_https_trusts_certifi(self):
+        import certifi
+        import ssl
+        with patch('ssl.create_default_context', wraps=ssl.create_default_context) as create:
+            bs.https_context()
+        create.assert_called_once_with(cafile=certifi.where())
+
     def test_bad_arguments_are_rejected(self):
         for extra in (['--confidence', '0'], ['--confidence', '1.5'],
                       ['--from-date', '2026-10-31', '--to-date', '2026-10-01'],

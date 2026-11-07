@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1 — 2026-11-07
+
+- Fix "CERTIFICATE_VERIFY_FAILED" in the Linux downloads on distributions that keep
+  CA certificates outside Ubuntu's location (Arch, Fedora, ...): HTTPS now trusts
+  certifi's certificate authorities, which are bundled. Affected Twitch search and
+  VOD downloads.
+- Add `--search NAME` to the command line; the release workflow uses it to check
+  HTTPS inside each Linux and macOS package.
+- Update numpy to 2.5, scipy to 1.18, TensorFlow to 2.21 and mido to 1.3.3.
+
 ## 0.3.0 — 2026-11-07
 
 - Release downloads for Windows (zip, code-signed), macOS (dmg, Apple silicon) and

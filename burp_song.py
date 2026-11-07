@@ -130,13 +130,36 @@ SEARCH_QUERY = '''query($q: String!) { searchFor(userQuery: $q, platform: "web",
   login displayName profileImageURL(width: 70) followers { totalCount } stream { id } } } } } } }'''
 
 
+def https_context():
+    """TLS settings trusting certifi's certificate authorities.
+
+    Packaged builds carry their own OpenSSL, which looks for the system's certificates
+    where the build machine kept them; other distributions keep them elsewhere.
+    """
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except ImportError:
+        return ssl.create_default_context()
+
+
+def print_channels(query):
+    channels = search_channels(query)
+    for c in channels:
+        followers = f"{c['followers']:,} followers" if c['followers'] is not None else ''
+        print(f"{c['login']:<26} {c['name']:<26} {followers}{'  LIVE' if c['live'] else ''}")
+    if not channels:
+        print(f'No Twitch channels match {query!r}.')
+
+
 def search_channels(query):
     """Search Twitch channels by name. Uses Twitch's unofficial web API, which may change."""
     import urllib.request
     body = json.dumps(dict(query=SEARCH_QUERY, variables=dict(q=query))).encode()
     request = urllib.request.Request('https://gql.twitch.tv/gql', body, {
         'Client-Id': TWITCH_CLIENT_ID, 'Content-Type': 'application/json'})
-    with urllib.request.urlopen(request, timeout=15) as response:
+    with urllib.request.urlopen(request, timeout=15, context=https_context()) as response:
         data = json.load(response)
     edges = (((data.get('data') or {}).get('searchFor') or {}).get('channels') or {}).get('edges') or []
     return [dict(login=u['login'], name=u['displayName'], image=u.get('profileImageURL'),
@@ -632,6 +655,7 @@ def parse_args(argv=None):
                    help=f'A sound to detect; repeat for several (default: "{DEFAULT_SOUND}"). '
                         'See --list-sounds for all 521.')
     p.add_argument('--list-sounds', action='store_true', help='List the sounds you can detect, then exit')
+    p.add_argument('--search', metavar='NAME', help='Search Twitch for channels by name, then exit')
     p.add_argument('--confidence', type=float, default=.35,
                    help='Detection score from 0 to 1; higher finds fewer, surer sounds (default: .35)')
     p.add_argument('--all', action='store_true',
@@ -647,8 +671,16 @@ def parse_args(argv=None):
                    help='Encode video on the CPU even if a GPU encoder is available')
     p.add_argument('--cookies-from-browser', choices=['firefox', 'chrome', 'chromium', 'brave', 'opera', 'edge'],
                    help="Use this browser's Twitch login (for subscriber-only VODs)")
-    if '--list-sounds' in (sys.argv[1:] if argv is None else argv):
+    raw = sys.argv[1:] if argv is None else argv
+    if '--list-sounds' in raw:
         print('\n'.join(sound_names()))
+        raise SystemExit(0)
+    if '--search' in raw:
+        # Runs before the other arguments are checked, like --list-sounds.
+        query = ' '.join(raw[raw.index('--search')+1:raw.index('--search')+2])
+        if not query:
+            p.error('--search needs a name, e.g. --search emmy')
+        print_channels(query)
         raise SystemExit(0)
     args = p.parse_args(argv)
     try:

@@ -286,7 +286,8 @@ class App:
                 self.events.put(('channels', (query, channels)))
                 for channel in channels:
                     if channel['image']:
-                        with urllib.request.urlopen(channel['image'], timeout=10) as r:
+                        with urllib.request.urlopen(channel['image'], timeout=10,
+                                                    context=bs.https_context()) as r:
                             self.events.put(('avatar', (channel['login'], r.read())))
             except Exception as exc:
                 self.events.put(('search_error', str(exc)))

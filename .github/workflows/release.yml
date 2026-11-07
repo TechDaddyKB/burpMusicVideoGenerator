@@ -154,6 +154,8 @@ jobs:
           python -c "import mido; m=mido.MidiFile(); t=mido.MidiTrack(); m.tracks.append(t); t+= [mido.Message('note_on', note=60), mido.Message('note_off', note=60, time=480)]; m.save('check/song.mid')"
           "$app" checkstreamer --midi check/song.mid --clips-dir check/clips --work-dir check/work --output check/song.mp4 --sound Cough
           ffmpeg-dist/ffprobe -v error -show_entries format=duration -of csv=p=0 check/song.mp4
+          # HTTPS from inside the package (its own OpenSSL + certifi). Windows builds have no console to print to.
+          if [ ${{ matrix.platform }} != windows ]; then "$app" --search emmytheaxolotl | tee check/search.txt; grep -q emmytheaxolotl check/search.txt; fi
       - name: Check the app window opens
         if: matrix.platform == 'linux'
         run: |

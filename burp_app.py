@@ -18,6 +18,11 @@ def main():
     ffmpeg_dir = bundle_dir()/'ffmpeg'
     if ffmpeg_dir.is_dir():
         os.environ['PATH'] = str(ffmpeg_dir)+os.pathsep+os.environ.get('PATH', '')
+    # The bundled OpenSSL looks for CA certificates where the build machine kept them, which
+    # differs between distributions; use certifi's for anything that relies on the default.
+    if getattr(sys, 'frozen', False) and 'SSL_CERT_FILE' not in os.environ:
+        import certifi
+        os.environ['SSL_CERT_FILE'] = certifi.where()
     if len(sys.argv) > 1:
         import burp_song
         try:
