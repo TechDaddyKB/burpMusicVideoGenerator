@@ -36,20 +36,14 @@ htmlcov/
 *.npy
 *.csv
 *.log
-burp-song*.json
-burp-song-v2-work/
-.burp-song-cache/
-sound_results/
-sneeze_results/
+burp-work/
 artifacts/
 inputs/
 outputs/
 media/
 
-# Temporary render/encode directories left behind by an interrupted run
+# Temporary render folder left behind by an interrupted run
 burp-render-*/
-.encode-*/
-.sneeze-join-*/
 
 # Local credentials and editor state
 .env

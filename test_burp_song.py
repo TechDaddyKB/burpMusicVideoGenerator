@@ -1,93 +1,240 @@
+from datetime import date, datetime, timezone
+import json
 import math
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import mido
 import numpy as np
 from scipy.io import wavfile
 
-from burp_song import SR, estimate_pitch, midi_notes, note_audio, playlist_paths, select_clip
+import burp_song as bs
 
 
-class RendererTests(unittest.TestCase):
-    def read_notes(self, midi_tracks, **kwargs):
-        with tempfile.TemporaryDirectory() as d:
-            mid = mido.MidiFile(ticks_per_beat=480)
-            mid.tracks.extend(midi_tracks)
-            path = Path(d) / 'test.mid'
-            mid.save(path)
-            return midi_notes(path, **kwargs)
+class FakeScores:
+    def __init__(self, data):
+        self.data = data
 
-    def test_global_tempo_and_polyphony(self):
-        tempo = mido.MidiTrack([
-            mido.MetaMessage('set_tempo', tempo=500000),
-            mido.MetaMessage('set_tempo', tempo=1000000, time=480)])
-        notes = mido.MidiTrack([
-            mido.Message('note_on', note=60, velocity=90),
-            mido.Message('note_on', note=64, velocity=90, time=240),
-            mido.Message('note_off', note=60, time=720),
-            mido.Message('note_off', note=64)])
-        result = self.read_notes([tempo, notes], tracks={1})
+    def numpy(self):
+        return self.data
+
+
+def constant_model(audio):
+    """Stand-in for YAMNet: one frame per 0.48 s step, every frame a confident burp."""
+    count = max(0, 1+(len(audio)-bs.WINDOW_SAMPLES)//bs.HOP_SAMPLES)
+    return FakeScores(np.full((count, 1), .9)), None, None
+
+
+def save_midi(path, *tracks):
+    mid = mido.MidiFile(ticks_per_beat=480)
+    mid.tracks.extend(mido.MidiTrack(t) for t in tracks)
+    mid.save(path)
+    return path
+
+
+class FixtureTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture_dir = tempfile.TemporaryDirectory()
+        cls.fixture = Path(cls.fixture_dir.name)/'fixture.mp4'
+        bs.run(['ffmpeg', '-nostdin', '-v', 'error', '-f', 'lavfi', '-i',
+                'color=c=blue:size=320x180:rate=24:duration=3', '-f', 'lavfi', '-i',
+                'sine=frequency=220:sample_rate=48000:duration=3',
+                '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', str(cls.fixture)])
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.fixture_dir.cleanup()
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.tmp = Path(temp.name)
+
+
+class MidiAndAudioTests(FixtureTest):
+    def test_tempo_change_and_overlapping_notes(self):
+        tempo = [mido.MetaMessage('set_tempo', tempo=500000),
+                 mido.MetaMessage('set_tempo', tempo=1000000, time=480)]
+        notes = [mido.Message('note_on', note=60, velocity=90),
+                 mido.Message('note_on', note=64, velocity=90, time=240),
+                 mido.Message('note_off', note=60, time=720),
+                 mido.Message('note_off', note=64)]
+        result = bs.midi_notes(save_midi(self.tmp/'a.mid', tempo, notes))
         self.assertEqual(len(result), 2)
         self.assertAlmostEqual(result[0]['duration'], 1.5)
         self.assertAlmostEqual(result[1]['start'], .25)
         self.assertAlmostEqual(result[1]['duration'], 1.25)
 
-    def test_sustain_and_default_drum_exclusion(self):
-        notes = mido.MidiTrack([
-            mido.Message('control_change', control=64, value=127),
-            mido.Message('note_on', note=60, velocity=100),
-            mido.Message('note_on', channel=9, note=36, velocity=100),
-            mido.Message('note_off', note=60, time=480),
-            mido.Message('note_off', channel=9, note=36),
-            mido.Message('control_change', control=64, value=0, time=480)])
-        result = self.read_notes([notes])
+    def test_sustain_pedal_and_drums_skipped_by_default(self):
+        track = [mido.Message('control_change', control=64, value=127),
+                 mido.Message('note_on', note=60, velocity=100),
+                 mido.Message('note_on', channel=9, note=36, velocity=100),
+                 mido.Message('note_off', note=60, time=480),
+                 mido.Message('note_off', channel=9, note=36),
+                 mido.Message('control_change', control=64, value=0, time=480)]
+        path = save_midi(self.tmp/'b.mid', track)
+        result = bs.midi_notes(path)
         self.assertEqual(len(result), 1)
         self.assertAlmostEqual(result[0]['duration'], 1)
-        self.assertEqual(len(self.read_notes([notes], include_drums=True)), 2)
+        self.assertEqual(len(bs.midi_notes(path, include_drums=True)), 2)
 
-    def test_repeated_same_pitch_note_pairing(self):
-        track = mido.MidiTrack([
-            mido.Message('note_on', note=60),
-            mido.Message('note_on', note=60, time=120),
-            mido.Message('note_off', note=60, time=120),
-            mido.Message('note_on', note=60, velocity=0, time=120)])
-        notes = self.read_notes([track])
-        self.assertEqual(len(notes), 2)
-        self.assertAlmostEqual(notes[0]['duration'], .25)
-        self.assertAlmostEqual(notes[1]['duration'], .25)
+    def test_repeated_same_pitch_notes(self):
+        track = [mido.Message('note_on', note=60),
+                 mido.Message('note_on', note=60, time=120),
+                 mido.Message('note_off', note=60, time=120),
+                 mido.Message('note_on', note=60, velocity=0, time=120)]
+        notes = bs.midi_notes(save_midi(self.tmp/'c.mid', track))
+        self.assertEqual([round(n['duration'], 3) for n in notes], [.25, .25])
 
     def test_pitch_estimate(self):
-        audio = .5*np.sin(2*math.pi*220*np.arange(SR)/SR)
-        self.assertAlmostEqual(estimate_pitch(audio), 57, delta=.15)
-        self.assertIsNone(estimate_pitch(np.zeros(SR)))
+        audio = .5*np.sin(2*math.pi*220*np.arange(bs.SR)/bs.SR)
+        self.assertAlmostEqual(bs.estimate_pitch(audio), 57, delta=.15)
+        self.assertIsNone(bs.estimate_pitch(np.zeros(bs.SR)))
 
-    def test_duration_selection(self):
+    def test_clip_choice_prefers_similar_length(self):
         clips = [dict(duration=.2, pitch=60), dict(duration=1., pitch=60)]
-        self.assertIs(select_clip(dict(duration=.22, pitch=60), clips), clips[0])
+        self.assertIs(bs.select_clip(dict(duration=.22, pitch=60), clips), clips[0])
 
-    def test_independent_pitch_and_duration_with_ffmpeg(self):
-        with tempfile.TemporaryDirectory() as d:
-            cache = Path(d)
-            path = cache/'tone.wav'
-            wavfile.write(path, SR, (.5*np.sin(2*math.pi*220*np.arange(SR//2)/SR)).astype(np.float32))
-            clip = dict(key='test-tone', wav=str(path), duration=.5, pitch=57)
-            audio = note_audio(dict(duration=.25, pitch=69), clip, cache)
-            self.assertEqual(len(audio), SR//4)
-            interior = audio[1000:-1000]
-            peak = np.argmax(np.abs(np.fft.rfft(interior*np.hanning(len(interior)))))
-            self.assertAlmostEqual(peak*SR/len(interior), 440, delta=12)
+    def test_pitch_shift_and_stretch(self):
+        path = self.tmp/'tone.wav'
+        wavfile.write(path, bs.SR, (.5*np.sin(2*math.pi*220*np.arange(bs.SR//2)/bs.SR)).astype(np.float32))
+        clip = dict(key='tone', wav=str(path), duration=.5, pitch=57)
+        audio = bs.note_audio(dict(duration=.25, pitch=69), clip, self.tmp)
+        self.assertEqual(len(audio), bs.SR//4)
+        interior = audio[1000:-1000]
+        peak = np.argmax(np.abs(np.fft.rfft(interior*np.hanning(len(interior)))))
+        self.assertAlmostEqual(peak*bs.SR/len(interior), 440, delta=12)
 
-    def test_relative_escaped_playlist(self):
-        with tempfile.TemporaryDirectory() as d:
-            directory = Path(d)
-            (directory/'a b.mp4').touch()
-            path = directory/'test.xspf'
-            path.write_text('<playlist xmlns="http://xspf.org/ns/0/"><trackList>'
-                            '<track><location>a%20b.mp4</location></track>'
-                            '</trackList></playlist>')
-            self.assertEqual(playlist_paths(path), [(directory/'a b.mp4').resolve()])
+    def test_make_song_end_to_end(self):
+        clip = self.tmp/'clips'/'burp-0001.mp4'
+        clip.parent.mkdir()
+        shutil.copyfile(self.fixture, clip)
+        midi = save_midi(self.tmp/'song.mid', [
+            mido.Message('note_on', note=60), mido.Message('note_on', note=64),
+            mido.Message('note_off', note=60, time=480), mido.Message('note_off', note=64)])
+        output = self.tmp/'song.mp4'
+        bs.make_song([clip], midi, output, self.tmp/'cache')
+        info = json.loads(bs.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration:stream=codec_type,width',
+                                  '-of', 'json', str(output)], capture_output=False,
+                                 stdout=bs.subprocess.PIPE).stdout)
+        self.assertAlmostEqual(float(info['format']['duration']), .5, delta=.1)
+        self.assertEqual({s['codec_type'] for s in info['streams']}, {'video', 'audio'})
+        self.assertEqual(max(s.get('width', 0) for s in info['streams']), bs.WIDTH)
+
+
+class DetectionTests(FixtureTest):
+    def test_find_burps_merges_overlapping_windows(self):
+        burps = bs.find_burps([.1, .9, .8, .1, .1, .5], .35)
+        self.assertEqual(len(burps), 2)
+        self.assertAlmostEqual(burps[0][0], bs.HOP_SECONDS)
+        self.assertAlmostEqual(burps[0][1], 2*bs.HOP_SECONDS+bs.WINDOW_SECONDS)
+        self.assertEqual(burps[0][2], .9)
+        self.assertEqual(bs.find_burps([.1, .2], .35), [])
+
+    def test_scores_cover_whole_video_across_chunks(self):
+        whole = bs.burp_scores(self.fixture, constant_model, 0, chunk_seconds=60)
+        chunked = bs.burp_scores(self.fixture, constant_model, 0, chunk_seconds=.96)
+        self.assertEqual(len(whole), math.ceil(3/bs.HOP_SECONDS))
+        self.assertEqual(len(chunked), len(whole))
+
+
+class TwitchTests(FixtureTest):
+    def test_list_vods_filters_dates_dedupes_and_skips_live(self):
+        dates = {1: (2026, 9, 30, 23, 59), 2: (2026, 10, 1, 0, 0), 3: (2026, 10, 31, 23, 59),
+                 4: (2026, 11, 1, 0, 0), 5: (2026, 10, 15, 0, 0)}
+
+        class Client:
+            def __init__(self, options):
+                self.options = options
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                pass
+
+            def extract_info(self, url, download=False):
+                if self.options.get('extract_flat'):
+                    return {'entries': [{'id': f'v{i}'} for i in [5, 4, 3, 3, 2, 1]]}
+                vod = int(url.rsplit('/', 1)[-1])
+                stamp = datetime(*dates[vod], tzinfo=timezone.utc).timestamp()
+                return dict(id=f'v{vod}', timestamp=stamp, is_live=vod == 5)
+
+        with patch('yt_dlp.YoutubeDL', side_effect=Client):
+            selected = bs.list_vods('streamer', date(2026, 10, 1), date(2026, 10, 31))
+            everything = bs.list_vods('streamer')
+        self.assertEqual([v['id'] for v in selected], ['2', '3'])
+        self.assertEqual([v['id'] for v in everything], ['1', '2', '3', '4'])
+
+    def vod(self):
+        return dict(id='123', date='2026-10-01', title='test', url='https://www.twitch.tv/videos/123')
+
+    def fake_download(self, vod, folder, cookies=None):
+        folder.mkdir(parents=True, exist_ok=True)
+        return Path(shutil.copyfile(self.fixture, folder/f"{vod['id']}.mp4"))
+
+    def test_process_vod_saves_clips_then_deletes_vod(self):
+        root = self.tmp/'work'
+        with patch.object(bs, 'download_vod', side_effect=self.fake_download), \
+             patch.object(bs, 'load_yamnet', return_value=(constant_model, 0)):
+            clips = bs.process_vod(self.vod(), root, .35)
+        self.assertTrue(clips and all(c.is_file() for c in clips))
+        self.assertFalse((root/'vods'/'123.mp4').exists())
+        self.assertTrue((root/'clips'/'123'/'done.json').exists())
+        with patch.object(bs, 'download_vod', side_effect=AssertionError('must not download again')):
+            self.assertEqual(bs.process_vod(self.vod(), root, .35), clips)
+
+    def test_failed_clip_keeps_vod_for_retry(self):
+        root = self.tmp/'work'
+        with patch.object(bs, 'download_vod', side_effect=self.fake_download), \
+             patch.object(bs, 'load_yamnet', return_value=(constant_model, 0)), \
+             patch.object(bs, 'cut_clip', side_effect=RuntimeError('encoder broke')):
+            with self.assertRaisesRegex(RuntimeError, 'encoder broke'):
+                bs.process_vod(self.vod(), root, .35)
+        self.assertTrue((root/'vods'/'123.mp4').exists())
+        self.assertFalse((root/'clips'/'123'/'done.json').exists())
+
+
+class CommandLineTests(FixtureTest):
+    def setUp(self):
+        super().setUp()
+        self.midi = save_midi(self.tmp/'song.mid', [mido.Message('note_on', note=60),
+                                                     mido.Message('note_off', note=60, time=480)])
+        self.base = ['streamer', '--midi', str(self.midi), '--work-dir', str(self.tmp/'work'),
+                     '--output', str(self.tmp/'out.mp4')]
+
+    def test_no_dates_with_existing_clips_skips_twitch(self):
+        clip = self.tmp/'work'/'streamer'/'clips'/'1'/'burp-0001.mp4'
+        clip.parent.mkdir(parents=True)
+        shutil.copyfile(self.fixture, clip)
+        with patch.object(bs, 'list_vods', side_effect=AssertionError('no network')), \
+             patch.object(bs, 'make_song') as make_song:
+            bs.main(self.base)
+        self.assertEqual(make_song.call_args.args[0], [clip])
+
+    def test_no_dates_without_clips_downloads_everything(self):
+        with patch.object(bs, 'list_vods', return_value=[]) as list_vods:
+            with self.assertRaisesRegex(ValueError, 'No burp clips'):
+                bs.main(self.base)
+        self.assertEqual(list_vods.call_args.args[1:3], (None, None))
+
+    def test_date_range_is_passed_through(self):
+        with patch.object(bs, 'list_vods', return_value=[]) as list_vods:
+            with self.assertRaises(ValueError):
+                bs.main(self.base+['--from-date', '2026-10-01', '--to-date', '2026-10-31'])
+        self.assertEqual(list_vods.call_args.args[1:3], (date(2026, 10, 1), date(2026, 10, 31)))
+
+    def test_bad_arguments_are_rejected(self):
+        for extra in (['--confidence', '0'], ['--confidence', '1.5'],
+                      ['--from-date', '2026-10-31', '--to-date', '2026-10-01'],
+                      ['--clips-dir', '.', '--all']):
+            with self.subTest(extra=extra), self.assertRaises(SystemExit), \
+                 patch('sys.stderr'):
+                bs.parse_args(self.base+extra)
 
 
 if __name__ == '__main__':

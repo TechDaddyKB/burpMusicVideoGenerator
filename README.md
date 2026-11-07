@@ -4,252 +4,137 @@
 try this.** At last, a practical answer to the question nobody at the conservatory
 was brave enough to ask.
 
-Give it a Twitch username, a date range, and a MIDI file. It finds archived
-broadcasts, downloads them, extracts likely burps, and plays your arrangement using
-those clips. Chords become split screens. A questionable bodily function becomes
-a questionable artistic decision. Everybody wins.
+Give it a Twitch username and a MIDI file. It downloads the streamer's archived
+broadcasts, finds their burps, and plays your song with them: each burp is
+pitch-shifted and stretched to fit its note, and notes that sound together share
+a split screen. A questionable bodily function becomes a questionable artistic
+decision. Everybody wins.
 
 **From indigestion to orchestration.**
 
-## What it does
+## How it works
 
-- Finds available Twitch archive broadcasts between inclusive UTC start dates.
-- Downloads and processes one broadcast at a time.
-- Detects candidate burps locally with YAMNet and saves individual video clips.
-- Deletes its new full downloads after their clips and detection records are saved.
-- Reuses existing clips when no dates are supplied, with no Twitch requests.
-- Matches each MIDI note to a clip, adjusts pitch and duration, and mixes the song.
-- Shows simultaneous notes in a split screen, with no generated title/note labels.
-
-Text already in the broadcast image stays in the image. We removed the renderer's
-labels; we did not invent a magic eraser for chat, game HUDs, or the streamer's
-very important "drink water" reminder.
+1. Lists the streamer's archived broadcasts (VODs) on Twitch, filtered by your dates.
+2. Downloads one VOD at a time.
+3. Finds burps with Google's [YAMNet](https://www.tensorflow.org/hub/tutorials/yamnet)
+   sound classifier and saves each one as a short video clip.
+4. Deletes the full VOD once its clips are saved.
+5. Plays every MIDI note with the burp clip closest in length, pitch-shifted and
+   stretched to fit, and saves the result as an MP4.
 
 ## Requirements
 
-- **Python 3.12**. Use this version for the included TensorFlow dependency range.
-- **FFmpeg and ffprobe**, with the `rubberband` audio filter and `libx264` encoder.
-- Disk space for one full broadcast, the retained clips, and rendering caches.
-- A MIDI file supplied by you. The software does not include songs or streamer footage.
+- **Python 3.12**
+- **FFmpeg**, with the `rubberband` audio filter and `libx264` encoder
+  (check with `ffmpeg -filters | grep rubberband`)
+- Disk space for one full VOD at a time, plus the clips
+- A MIDI file. No songs or footage are included.
 
-CPU processing works. No API key or paid AI service is needed. YAMNet weights may
-download on first detection use. NVIDIA encoding is optional, not required.
-
-Linux is the tested platform. Other platforms need compatible TensorFlow wheels
-and an FFmpeg build with those filters/encoders; they have not been validated here.
+No API key or paid service is needed, and it runs on a CPU. YAMNet's weights
+download automatically the first time it looks for burps. Linux is the tested platform.
 
 ## Setup
-
-Clone your copy of this repository, then enter its directory:
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/burpMusicVideoGenerator.git
 cd burpMusicVideoGenerator
 ```
 
-Install FFmpeg using your system's package manager. For example:
+Install FFmpeg (`sudo apt-get install ffmpeg` on Ubuntu/Debian,
+`sudo pacman -S ffmpeg` on Arch), then the Python packages with
+[uv](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```bash
-# Ubuntu / Debian
-sudo apt-get update
-sudo apt-get install -y ffmpeg
-
-# Arch Linux
-sudo pacman -S --needed ffmpeg
-```
-
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) if you don't
-already have it, then create the Python environment:
-
-```bash
-uv python install 3.12
 uv venv --python 3.12 .venv
 uv pip install --python .venv/bin/python -r requirements.txt
 source .venv/bin/activate
-python burp_song_v2.py --help
 ```
 
-Already have Python 3.12 and prefer pip? The old-fashioned digestive tract works too:
+Or with plain pip:
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
+pip install -r requirements.txt
 ```
 
-You can inspect FFmpeg's capabilities with `ffmpeg -filters` and `ffmpeg -encoders`.
-Look for `rubberband` and `libx264` respectively.
+## Usage
 
-## Download broadcasts and make a song
+Download October's broadcasts and make a song:
 
 ```bash
-python burp_song_v2.py emmytheaxolotl \
+python burp_song.py emmytheaxolotl --midi song.mid \
   --from-date 2026-10-01 --to-date 2026-10-31 \
-  --midi /path/to/song.mid \
-  --output artifacts/burp-symphony.mp4
+  --output burp-symphony.mp4
 ```
 
-Replace the username, dates, and MIDI path with yours. Dates select broadcasts by
-their **start date in UTC**, including both endpoints. A broadcast starting on the
-last date is included in full, even if it ends the next day. Both dates must be
-supplied together.
-
-The tool searches the streamer's archive listing, equivalent to:
-
-```text
-https://www.twitch.tv/USERNAME/videos?filter=archives&sort=time
-```
-
-It can only discover broadcasts that remain available there. Expired or deleted
-VODs cannot be retrieved. A date/metadata/download failure stops the run instead
-of quietly declaring an incomplete collection finished.
-
-Check the selection before moving any video bytes:
+Leave out the dates to reuse the clips you already have. If there aren't any yet,
+it downloads the streamer's whole VOD archive instead:
 
 ```bash
-python burp_song_v2.py emmytheaxolotl \
-  --from-date 2026-10-01 --to-date 2026-10-31 --list-only
+python burp_song.py emmytheaxolotl --midi another-song.mid --output encore.mp4
 ```
 
-## Use clips you already have
-
-Omit both dates to skip Twitch discovery, downloads, and sound detection:
-
-```bash
-python burp_song_v2.py emmytheaxolotl \
-  --midi /path/to/song.mid \
-  --output artifacts/encore.mp4
-```
-
-By default it looks in its own streamer workspace, `sound_results/USERNAME`,
-`./USERNAME`, and the current directory if its name matches the streamer.
-Select another library explicitly with `--clips-dir`:
-
-```bash
-python burp_song_v2.py emmytheaxolotl \
-  --clips-dir /path/to/existing/clips \
-  --midi /path/to/song.mid \
-  --seconds 15 --output artifacts/short-burp-story.mp4
-```
-
-The clip tree should contain `Burping_eructation` folders, for example:
-
-```text
-my-clips/
-  some-broadcast/
-    Burping_eructation/
-      burp_001.mp4
-      burp_002.mp4
-```
-
-Every MP4 in matching folders is eligible. No MIDI file, sample video, or generated
-clip is bundled with the repository.
-
-## The full-video disappearing act
-
-For each new download, the program finishes extracting all detected clips and
-saves a complete detection record **before deleting that full video**. It keeps
-the clips, scores, and metadata. The next song can use the clips alone.
-
-- A failed extraction preserves its full video for retry.
-- `--keep-vods` retains new full downloads while you experiment.
-- `--reuse-dir /path/to/old/vods` reuses `VOD_ID/original.*` or
-  `vVOD_ID/original.*` there. Those pre-existing full videos are preserved.
-- `--scan-seconds 1800` scans only the first 30 minutes of each VOD and retains its
-  full download because the rest has not been analyzed.
-- A completed scan with no burps saves an empty record and may still delete its
-  v2-owned full download. No song is rendered if the entire selection yields no clips.
-- Rerunning the same settings reuses completed clips and scan checkpoints. Changing
-  extraction settings after deleting a VOD may require downloading it again.
-
-Deleted full videos can only be restored by downloading them again while they are
-available. This is why `--keep-vods` exists: sometimes the encore needs more gas.
-
-## Useful knobs
-
-| Option | What it changes |
+| Option | What it does |
 | --- | --- |
-| `--burp-threshold .50` | Raises detection selectivity; default `.35`. |
-| `--max-vods 1` | Processes only the first selected broadcast for a trial. |
-| `--scan-seconds 1800` | Limits detection to 30 minutes per VOD; keeps full downloads. |
-| `--start 30 --seconds 15` | Renders MIDI seconds 30–45 as a preview. |
-| `--channels 2,3` | Uses selected zero-based MIDI channels. |
-| `--tracks 1,2` | Uses selected zero-based MIDI tracks. |
-| `--octave -1` | Lowers the arrangement an octave. |
-| `--include-drums` | Treats percussion channel 9 as pitched notes; off by default. |
-| `--width 640 --height 360 --fps 24` | Makes a smaller preview. Default is 1280×720/30. |
-| `--work-dir /path/to/work` | Changes where clips, temporary VODs and caches live. |
-| `--keep-vods` | Retains new full downloads after extraction. |
-| `--cookies-from-browser chrome` | Uses a browser session when Twitch access requires it. |
-| `--encoder nvenc` | Uses NVIDIA encoding for extracted clips; CPU remains the song encoder. |
+| `--midi FILE` | The song to play. Required. |
+| `--output FILE` | The MP4 to create (default `burp-song.mp4`). It won't overwrite an existing file. |
+| `--from-date`, `--to-date` | Only download broadcasts that started in this range (`YYYY-MM-DD`, UTC, inclusive). Either one can be used alone. |
+| `--confidence N` | How sure the detector must be that a sound is a burp, from 0 to 1 (default `.35`). Higher means fewer, surer burps. |
+| `--all` | Without dates, download the whole archive even when clips already exist. |
+| `--clips-dir DIR` | Use the MP4 clips in another folder instead of downloading. |
+| `--seconds N` | Render only the first N seconds, for a quick preview. |
+| `--work-dir DIR` | Where clips, the VOD being processed, and caches go (default `burp-work`). |
+| `--cookies-from-browser NAME` | Use your browser's Twitch login, for subscriber-only VODs. |
 
-An optional yt-dlp format selector can reduce download size:
+Only VODs still listed on the streamer's
+[archive page](https://www.twitch.tv/emmytheaxolotl/videos?filter=archives&sort=time)
+can be downloaded. Broadcasts that are still live are skipped.
 
-```bash
-python burp_song_v2.py emmytheaxolotl \
-  --from-date 2026-10-01 --to-date 2026-10-31 \
-  --download-format 'bv*[height<=720]+ba/b[height<=720]' \
-  --midi /path/to/song.mid --output artifacts/720p-gas.mp4
+## Where things go
+
+```text
+burp-work/emmytheaxolotl/
+  clips/<vod-id>/burp-0001.mp4   the burp clips (kept)
+  clips/<vod-id>/done.json       where each burp came from and its score
+  vods/                          the VOD being processed (deleted when done)
+  cache/                         audio and video cache for rendering
 ```
 
-## Output and limitations
+A full VOD is only deleted after all its clips are saved, so if something fails
+you can rerun the same command and it carries on. Broadcasts that are already
+done are skipped. Because the VOD is gone, changing `--confidence` later only
+affects new broadcasts; delete a broadcast's `clips/<vod-id>` folder to redo it.
 
-The MP4 has an adjacent JSON report listing note-to-clip assignments. The default
-working directory is `burp-song-v2-work/USERNAME/`, containing broadcast metadata,
-retained `Burping_eructation` samples, extraction records, detector scores,
-generated playlists, and a song-rendering cache. Existing output videos/reports
-are refused; use a new output filename for each attempt.
+The `cache` folder can grow to several GB. It's safe to delete when nothing is
+rendering. Keep the `clips` folder: it's what future songs are made from.
 
-Detection can mistake voices or game audio for burps. Scores are not calibrated
-probabilities. Pitch matching uses one estimated pitch per clip, so a wandering
-burp stays a wandering burp. Background music and speech are transformed too.
-Large pitch shifts or stretches can sound rough. This is a burp orchestra, not
-Vienna Philharmonic with a stomach ache.
+## Limitations
 
-Source frames are cached at 640×360, and grid tiles rearrange as notes start and
-stop. MIDI program sounds, pitch bends, and expression are not reproduced.
-The cache can grow to several GB; remove the `song-cache` directory when no render
-is running to reclaim space. Preserve the extracted clips for future songs.
+- The detector sometimes mistakes voices or game audio for burps, and scores are
+  not true probabilities.
+- Each clip gets one estimated pitch, so a wandering burp stays a wandering burp.
+- Big pitch shifts or stretches can sound rough.
+- MIDI drums (channel 10) are skipped, and instrument sounds, pitch bends and
+  expression aren't reproduced.
+- Anything already on screen in the broadcast (chat, game HUDs) stays in the video.
 
-## Tests and development
+This is a burp orchestra, not the Vienna Philharmonic with a stomach ache.
+
+## Tests
 
 ```bash
-source .venv/bin/activate
 python -m unittest discover -v
-uv pip check --python .venv/bin/python
 ```
 
-The suite uses generated audio/video and mocked Twitch responses. It tests MIDI
-timing, pitch/duration changes, split screens without labels, date filtering,
-download options, retry behavior, and full-video cleanup. It makes no live Twitch
-requests and does not download YAMNet weights. Live media downloads and optional
-GPU/browser-cookie paths require separate checks.
-
-GitHub Actions runs the same tests on Linux with Python 3.12 and FFmpeg on pushes
-and pull requests. See [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Publish your GitHub repository
-
-This is a command-line program, so publishing means pushing this source repository;
-it does not need a hosted web server.
-
-The local Git repository is already initialized on `main`. Create an **empty**
-GitHub repository without an autogenerated README, license, or `.gitignore`, then:
-
-```bash
-git remote add origin https://github.com/YOUR_USERNAME/burpMusicVideoGenerator.git
-git push -u origin main
-```
-
-The repository ignores videos, audio, MIDI inputs, generated work folders, virtual
-environments, caches, logs, and common credential files. Inputs and output clips
-stay on your machine. It has no GitHub remote configured until you add one.
+The tests use generated audio and video, a stand-in for YAMNet and fake Twitch
+responses, so they make no network requests. GitHub Actions runs them on every
+push. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Credits
 
-Built with [yt-dlp](https://github.com/yt-dlp/yt-dlp),
-[YAMNet](https://www.tensorflow.org/hub/tutorials/yamnet), FFmpeg/Rubber Band,
-NumPy, SciPy, Mido, and OpenCV. The model and dependencies retain their own licenses.
+Built with [yt-dlp](https://github.com/yt-dlp/yt-dlp), YAMNet, FFmpeg and
+Rubber Band, NumPy, SciPy, Mido, and OpenCV, which keep their own licenses.
 Bring your own MIDI and footage you can use. Bring your own sense of humor, too;
 we spent the entire budget on the bass section.
 
