@@ -33,6 +33,28 @@ decision. Everybody wins.
 No API key or paid service is needed, and it runs on a CPU. YAMNet's weights
 download automatically the first time it looks for burps. Linux is the tested platform.
 
+### GPU acceleration
+
+Video encoding uses your GPU automatically when FFmpeg can. At startup it tries
+these in order and uses the first that works, otherwise the CPU:
+
+| GPU | FFmpeg encoder |
+| --- | --- |
+| NVIDIA | NVENC |
+| Intel | Quick Sync |
+| AMD (Windows) | AMF |
+| Apple | VideoToolbox |
+| AMD or Intel (Linux) | VAAPI |
+| Most others | Vulkan |
+
+Your FFmpeg build and GPU drivers must support the encoder; the log says which
+one was picked.
+
+Burp detection uses TensorFlow, which runs YAMNet on the GPU if it can see one.
+For NVIDIA on Linux, install `pip install "tensorflow[and-cuda]"`. AMD needs
+TensorFlow's ROCm build and Apple needs `tensorflow-metal`. Otherwise detection
+runs on the CPU, which is fine: YAMNet is a small model.
+
 ## Setup
 
 ```bash
@@ -58,7 +80,24 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Usage
+## The app
+
+```bash
+python burp_gui.py
+```
+
+Search for a streamer and click them, optionally set a date range, drag the
+confidence slider, choose a MIDI file and where to save the video, then press
+**Make the video**. The log shows progress, and **Play video** opens the result.
+Videos are saved in the `outputs` folder by default.
+
+The app needs Tkinter, which comes with Python from python.org, uv and Homebrew.
+On Debian/Ubuntu, install it with `sudo apt-get install python3-tk`.
+
+Streamer search uses Twitch's public website API, which Twitch could change. If
+search stops working, type the exact username and press Search to use it anyway.
+
+## Command line
 
 Download October's broadcasts and make a song:
 
@@ -85,6 +124,7 @@ python burp_song.py emmytheaxolotl --midi another-song.mid --output encore.mp4
 | `--clips-dir DIR` | Use the MP4 clips in another folder instead of downloading. |
 | `--seconds N` | Render only the first N seconds, for a quick preview. |
 | `--work-dir DIR` | Where clips, the VOD being processed, and caches go (default `burp-work`). |
+| `--cpu-only` | Encode video on the CPU even when a GPU encoder is available. |
 | `--cookies-from-browser NAME` | Use your browser's Twitch login, for subscriber-only VODs. |
 
 Only VODs still listed on the streamer's

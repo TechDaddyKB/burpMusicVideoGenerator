@@ -199,6 +199,67 @@ class TwitchTests(FixtureTest):
         self.assertFalse((root/'clips'/'123'/'done.json').exists())
 
 
+class EncoderTests(unittest.TestCase):
+    def setUp(self):
+        bs._encoder = None
+        self.addCleanup(setattr, bs, '_encoder', None)
+
+    def test_cpu_only_skips_probing(self):
+        with patch.object(bs.subprocess, 'run', side_effect=AssertionError('no probe')):
+            self.assertEqual(bs.pick_encoder('cpu')['id'], 'cpu')
+
+    def test_falls_back_to_cpu_when_no_gpu_encoder_works(self):
+        failed = bs.subprocess.CompletedProcess([], 1)
+        with patch.object(bs.subprocess, 'run', return_value=failed):
+            self.assertEqual(bs.pick_encoder()['id'], 'cpu')
+
+    def test_picks_first_working_gpu_encoder(self):
+        def fake_run(cmd, **kwargs):
+            return bs.subprocess.CompletedProcess(cmd, 0 if 'h264_amf' in cmd else 1)
+        with patch.object(bs.subprocess, 'run', side_effect=fake_run):
+            self.assertEqual(bs.pick_encoder()['id'], 'amf')
+
+    def test_cpu_encoder_settings_produce_a_playable_clip(self):
+        with tempfile.TemporaryDirectory() as d:
+            source = Path(d)/'in.mp4'
+            bs.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=size=320x180:duration=1',
+                    '-f', 'lavfi', '-i', 'sine=duration=1', '-shortest', str(source)])
+            bs.cut_clip(source, .2, .7, Path(d)/'clip.mp4', bs.CPU_ENCODER)
+            self.assertTrue((Path(d)/'clip.mp4').stat().st_size > 0)
+
+
+class GuiFormTests(unittest.TestCase):
+    def setUp(self):
+        import burp_gui
+        self.gui = burp_gui
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.tmp = Path(temp.name)
+        self.midi = save_midi(self.tmp/'s.mid', [mido.Message('note_on', note=60),
+                                                  mido.Message('note_off', note=60, time=480)])
+
+    def test_form_becomes_script_arguments(self):
+        argv, output = self.gui.build_argv(' EmmyTheAxolotl ', '2026-10-01', '', .4, str(self.midi),
+                                           str(self.tmp/'song'), download_all=True, cpu_only=True)
+        self.assertEqual(output, self.tmp/'song.mp4')
+        self.assertEqual(argv[0], 'emmytheaxolotl')
+        self.assertIn('--from-date', argv)
+        self.assertNotIn('--to-date', argv)
+        self.assertNotIn('--all', argv)  # only applies without dates
+        self.assertIn('--cpu-only', argv)
+        self.assertEqual(argv[argv.index('--confidence')+1], '0.40')
+        bs.parse_args(argv)  # the script accepts what the form builds
+
+    def test_form_problems_are_explained(self):
+        cases = [('', '', '', 'streamer'), ('x', '10/01/2026', '', 'From date'),
+                 ('x', '2026-10-31', '2026-10-01', 'on or before')]
+        for user, start, end, message in cases:
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                self.gui.build_argv(user, start, end, .35, str(self.midi), str(self.tmp/'o.mp4'))
+        with self.assertRaisesRegex(ValueError, 'MIDI'):
+            self.gui.build_argv('x', '', '', .35, '', str(self.tmp/'o.mp4'))
+
+
 class CommandLineTests(FixtureTest):
     def setUp(self):
         super().setUp()

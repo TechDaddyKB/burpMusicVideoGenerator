@@ -54,6 +54,55 @@ def run(cmd, **kwargs):
     return result
 
 
+# --- Video encoder (GPU when available) ----------------------------------------
+
+def encoder_options():
+    """Hardware H.264 encoders to try, best first, then the CPU encoder.
+
+    Each has: global options (before the inputs), a filter to get frames into the
+    encoder's format, and the encoder options.
+    """
+    options = [
+        ('nvenc', 'NVIDIA NVENC', [], 'format=yuv420p', ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '23', '-b:v', '0']),
+        ('qsv', 'Intel Quick Sync', [], 'format=nv12', ['-c:v', 'h264_qsv', '-global_quality', '23']),
+        ('amf', 'AMD AMF', [], 'format=nv12', ['-c:v', 'h264_amf', '-rc', 'cqp', '-qp_i', '23', '-qp_p', '23']),
+        ('videotoolbox', 'Apple VideoToolbox', [], 'format=yuv420p', ['-c:v', 'h264_videotoolbox', '-q:v', '65']),
+    ]
+    # VAAPI covers AMD and Intel GPUs on Linux; try each GPU's render device.
+    for device in sorted(Path('/dev/dri').glob('renderD*')):
+        options.append((f'vaapi:{device}', f'VAAPI ({device.name})', ['-vaapi_device', str(device)],
+                        'format=nv12,hwupload', ['-c:v', 'h264_vaapi', '-qp', '23']))
+    options.append(('vulkan', 'Vulkan', ['-init_hw_device', 'vulkan'], 'format=nv12,hwupload',
+                    ['-c:v', 'h264_vulkan', '-qp', '23']))
+    return [dict(id=i, name=n, global_args=g, filter=f, args=a) for i, n, g, f, a in options]
+
+
+CPU_ENCODER = dict(id='cpu', name='CPU (libx264)', global_args=[], filter='format=yuv420p',
+                   args=['-c:v', 'libx264', '-preset', 'fast', '-crf', '21'])
+_encoder = None
+
+
+def pick_encoder(choice='auto'):
+    """Return the first encoder that can actually encode a test video here."""
+    global _encoder
+    if choice == 'cpu':
+        return CPU_ENCODER
+    if _encoder is None:
+        _encoder = CPU_ENCODER
+        for option in encoder_options():
+            test = ['ffmpeg', '-v', 'error', '-nostdin', *option['global_args'], '-f', 'lavfi',
+                    '-i', 'color=c=black:size=320x240:rate=30:duration=0.2',
+                    '-vf', option['filter'], *option['args'], '-f', 'null', '-']
+            try:
+                if subprocess.run(test, capture_output=True, timeout=20).returncode == 0:
+                    _encoder = option
+                    break
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        LOG.info('Video encoder: %s', _encoder['name'])
+    return _encoder
+
+
 # --- Twitch -------------------------------------------------------------------
 
 def ydl_options(cookies_from_browser=None, **extra):
@@ -61,6 +110,27 @@ def ydl_options(cookies_from_browser=None, **extra):
     if cookies_from_browser:
         options['cookiesfrombrowser'] = (cookies_from_browser,)
     return options
+
+
+# Twitch's public web client ID (the one twitch.tv and yt-dlp use; not a secret).
+TWITCH_CLIENT_ID = 'kimne78kx3ncx6brgo4mv6wki5h1ko'
+SEARCH_QUERY = '''query($q: String!) { searchFor(userQuery: $q, platform: "web",
+  options: {targets: [{index: CHANNEL}]}) { channels { edges { item { ... on User {
+  login displayName profileImageURL(width: 70) followers { totalCount } stream { id } } } } } } }'''
+
+
+def search_channels(query):
+    """Search Twitch channels by name. Uses Twitch's unofficial web API, which may change."""
+    import urllib.request
+    body = json.dumps(dict(query=SEARCH_QUERY, variables=dict(q=query))).encode()
+    request = urllib.request.Request('https://gql.twitch.tv/gql', body, {
+        'Client-Id': TWITCH_CLIENT_ID, 'Content-Type': 'application/json'})
+    with urllib.request.urlopen(request, timeout=15) as response:
+        data = json.load(response)
+    edges = (((data.get('data') or {}).get('searchFor') or {}).get('channels') or {}).get('edges') or []
+    return [dict(login=u['login'], name=u['displayName'], image=u.get('profileImageURL'),
+                 followers=(u.get('followers') or {}).get('totalCount'), live=bool(u.get('stream')))
+            for u in (edge.get('item') or {} for edge in edges) if u.get('login')]
 
 
 def list_vods(username, from_date=None, to_date=None, cookies_from_browser=None):
@@ -123,8 +193,13 @@ def load_yamnet():
         import csv
         os.environ.setdefault('TF_USE_LEGACY_KERAS', '1')
         os.environ.setdefault('TF_CPP_MIN_LOG_LEVEL', '2')
+        import tensorflow as tf
         import tensorflow_hub as hub
-        LOG.info('Loading YAMNet')
+        gpus = tf.config.list_physical_devices('GPU')
+        for gpu in gpus:
+            # Take GPU memory as needed, leaving room for the video encoder.
+            tf.config.experimental.set_memory_growth(gpu, True)
+        LOG.info('Loading YAMNet on %s', 'the GPU' if gpus else 'the CPU')
         model = hub.load(YAMNET_URL)
         with open(model.class_map_path().numpy().decode(), encoding='utf-8') as f:
             names = [row['display_name'] for row in csv.DictReader(f)]
@@ -181,19 +256,19 @@ def find_burps(scores, confidence):
     return burps
 
 
-def cut_clip(video, start, end, target):
+def cut_clip(video, start, end, target, encoder=CPU_ENCODER):
     target.parent.mkdir(parents=True, exist_ok=True)
     temp = target.with_suffix('.tmp.mp4')
-    run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-ss', f'{start:.3f}', '-i', str(video),
+    run(['ffmpeg', '-nostdin', '-v', 'error', '-y', *encoder['global_args'],
+         '-ss', f'{start:.3f}', '-i', str(video),
          '-t', f'{end-start:.3f}', '-map', '0:v:0', '-map', '0:a:0',
          '-vf', f'scale={WIDTH}:{HEIGHT}:force_original_aspect_ratio=decrease,'
-                f'pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS}',
-         '-c:v', 'libx264', '-preset', 'fast', '-crf', '21', '-pix_fmt', 'yuv420p',
-         '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2', str(temp)])
+                f'pad={WIDTH}:{HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps={FPS},{encoder["filter"]}',
+         *encoder['args'], '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2', str(temp)])
     temp.replace(target)
 
 
-def process_vod(vod, root, confidence, cookies_from_browser=None):
+def process_vod(vod, root, confidence, cookies_from_browser=None, encoder=CPU_ENCODER):
     """Download one VOD, save its burp clips, then delete the VOD. Returns the clips."""
     folder = root/'clips'/vod['id']
     done = folder/'done.json'
@@ -207,7 +282,7 @@ def process_vod(vod, root, confidence, cookies_from_browser=None):
     clips = []
     for number, (start, end, score) in enumerate(burps, 1):
         clip = folder/f'burp-{number:04}.mp4'
-        cut_clip(video, start, end, clip)
+        cut_clip(video, start, end, clip, encoder)
         clips.append(clip)
     folder.mkdir(parents=True, exist_ok=True)
     done.write_text(json.dumps(dict(vod=vod, confidence=confidence, burps=[
@@ -371,12 +446,11 @@ class Frames:
         return self.loaded[key]
 
 
-def render_video(notes, clips, audio_path, output, seconds, cache):
+def render_video(notes, clips, audio_path, output, seconds, cache, encoder=CPU_ENCODER):
     frames = Frames(cache)
-    cmd = ['ffmpeg', '-v', 'error', '-y', '-f', 'rawvideo', '-pixel_format', 'bgr24',
+    cmd = ['ffmpeg', '-v', 'error', '-y', *encoder['global_args'], '-f', 'rawvideo', '-pixel_format', 'bgr24',
            '-video_size', f'{WIDTH}x{HEIGHT}', '-framerate', str(FPS), '-i', '-',
-           '-i', str(audio_path), '-map', '0:v', '-map', '1:a',
-           '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p',
+           '-i', str(audio_path), '-map', '0:v', '-map', '1:a', '-vf', encoder['filter'], *encoder['args'],
            '-c:a', 'aac', '-b:a', '192k', '-t', f'{seconds:.3f}', '-movflags', '+faststart', str(output)]
     with tempfile.TemporaryFile() as err:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=err)
@@ -419,7 +493,7 @@ def render_video(notes, clips, audio_path, output, seconds, cache):
                 proc.wait()
 
 
-def make_song(clip_paths, midi, output, cache, seconds=None):
+def make_song(clip_paths, midi, output, cache, seconds=None, encoder=CPU_ENCODER):
     notes = midi_notes(midi)
     end = max((n['start']+n['duration'] for n in notes), default=0)
     if seconds:
@@ -448,7 +522,7 @@ def make_song(clip_paths, midi, output, cache, seconds=None):
     with tempfile.TemporaryDirectory(prefix='burp-render-', dir=output.parent) as work:
         work = Path(work)
         wavfile.write(work/'mix.wav', SR, mix)
-        render_video(notes, clips, work/'mix.wav', work/'song.mp4', end, cache)
+        render_video(notes, clips, work/'mix.wav', work/'song.mp4', end, cache, encoder)
         (work/'song.mp4').replace(output)
     LOG.info('Created %s (%d notes, %.1f seconds)', output, len(notes), end)
 
@@ -477,6 +551,8 @@ def parse_args(argv=None):
     p.add_argument('--work-dir', type=Path, default=Path('burp-work'),
                    help='Where clips, temporary VODs and caches go (default: burp-work)')
     p.add_argument('--seconds', type=float, help='Render only the first N seconds of the song, for a preview')
+    p.add_argument('--cpu-only', action='store_true',
+                   help='Encode video on the CPU even if a GPU encoder is available')
     p.add_argument('--cookies-from-browser', choices=['firefox', 'chrome', 'chromium', 'brave', 'opera', 'edge'],
                    help="Use this browser's Twitch login (for subscriber-only VODs)")
     args = p.parse_args(argv)
@@ -507,6 +583,7 @@ def main(argv=None):
         if not shutil.which(tool):
             raise RuntimeError(f'{tool} is required; install FFmpeg first')
     root = args.work_dir/args.username
+    encoder = pick_encoder('cpu' if args.cpu_only else 'auto')
     if args.clips_dir:
         clips = existing_clips(args.clips_dir)
     elif args.from_date or args.to_date or args.all or not existing_clips(root/'clips'):
@@ -514,14 +591,14 @@ def main(argv=None):
         LOG.info('Found %d broadcasts', len(vods))
         clips = []
         for vod in vods:
-            clips += process_vod(vod, root, args.confidence, args.cookies_from_browser)
+            clips += process_vod(vod, root, args.confidence, args.cookies_from_browser, encoder)
     else:
         clips = existing_clips(root/'clips')
         LOG.info('Using %d existing clips from %s', len(clips), root/'clips')
     if not clips:
         raise ValueError('No burp clips found, so there is nothing to play. '
                          'Try other dates or a lower --confidence.')
-    make_song(clips, args.midi, args.output, root/'cache', args.seconds)
+    make_song(clips, args.midi, args.output, root/'cache', args.seconds, encoder)
 
 
 if __name__ == '__main__':
