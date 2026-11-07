@@ -2,4 +2,4 @@
 # built-in NumPy copy. On Linux it can use an NVIDIA GPU; for that install
 # "tensorflow[and-cuda]" instead of tensorflow.
 -r requirements.txt
-tensorflow>=2.16,<2.19
+tensorflow>=2.21.0,<2.22
