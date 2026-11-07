@@ -47,7 +47,7 @@ jobs:
         include:
           - { target: linux-x64, os: ubuntu-22.04 }   # oldest supported glibc, so it runs on more distros
           - { target: win-x64, os: ubuntu-24.04 }     # cross-built with mingw-w64
-          - { target: osx-arm64, os: macos-14 }
+          - { target: osx-arm64, os: macos-latest }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 from collections import OrderedDict, defaultdict, deque
 from datetime import date, datetime, timezone
 import hashlib
@@ -106,8 +107,8 @@ def pick_encoder(choice='auto'):
                 if subprocess.run(test, capture_output=True, timeout=20, **NO_WINDOW).returncode == 0:
                     _encoder = option
                     break
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                LOG.debug('%s unavailable: %s', option['name'], exc)
         LOG.info('Video encoder: %s', _encoder['name'])
     return _encoder
 
@@ -567,10 +568,9 @@ def render_video(notes, clips, audio_path, output, seconds, cache, encoder=CPU_E
                     break  # ffmpeg stopped early; its exit code and message are reported below
                 if frame % (FPS*10) == 0:
                     LOG.info('Video %.0f / %.0f seconds', t, seconds)
-            try:
-                proc.stdin.close()
-            except BrokenPipeError:
-                pass
+            if not proc.stdin.closed:
+                with contextlib.suppress(BrokenPipeError):  # ffmpeg already exited; reported below
+                    proc.stdin.close()
             if proc.wait():
                 err.seek(0)
                 raise RuntimeError(f'ffmpeg failed: {err.read().decode(errors="replace")[-3000:]}')

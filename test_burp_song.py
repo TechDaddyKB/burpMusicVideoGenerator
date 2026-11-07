@@ -285,7 +285,7 @@ class EncoderTests(unittest.TestCase):
             bs.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=size=320x180:duration=1',
                     '-f', 'lavfi', '-i', 'sine=duration=1', '-shortest', str(source)])
             bs.cut_clip(source, .2, .7, Path(d)/'clip.mp4', bs.CPU_ENCODER)
-            self.assertTrue((Path(d)/'clip.mp4').stat().st_size > 0)
+            self.assertGreater((Path(d)/'clip.mp4').stat().st_size, 0)
 
 
 class GuiFormTests(unittest.TestCase):

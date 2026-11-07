@@ -19,16 +19,17 @@ OUT = Path(__file__).resolve().parent.parent/'yamnet_weights.npz'
 def main(model_dir):
     reader = tf.train.load_checkpoint(str(Path(model_dir)/'variables'/'variables'))
 
+    def key(layer, name):
+        return f'_yamnet/layer_with_weights-{layer}/{name}/.ATTRIBUTES/VARIABLE_VALUE'
+
     def get(layer, name):
-        return reader.get_tensor(f'_yamnet/layer_with_weights-{layer}/{name}/.ATTRIBUTES/VARIABLE_VALUE')
+        return reader.get_tensor(key(layer, name))
 
     arrays = {}
     for layer in range(54):
         for name in ('kernel', 'depthwise_kernel', 'beta', 'moving_mean', 'moving_variance'):
-            try:
+            if reader.has_tensor(key(layer, name)):  # each layer has only some of these
                 arrays[f'{layer}/{name}'] = get(layer, name).astype(np.float32)
-            except Exception:
-                pass
     arrays['54/kernel'] = get(54, 'kernel').astype(np.float32)
     arrays['54/bias'] = get(54, 'bias').astype(np.float32)
     # The same mel filterbank YAMNet builds at run time, so NumPy needn't recreate TF's formula.
