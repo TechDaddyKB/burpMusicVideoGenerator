@@ -19,9 +19,6 @@ concurrency:
 
 env:
   PYTHON_VERSION: '3.12'
-  # Google's YAMNet SavedModel for the TensorFlow edition (Apache 2.0), pinned by checksum.
-  YAMNET_URL: https://tfhub.dev/google/yamnet/1?tf-hub-format=compressed
-  YAMNET_SHA256: b80da2a1a56926fb0767205051a200dd7b3beaf3ea1ea126c42a53943996e5e0
 
 jobs:
   # Refuse to package Python dependencies with known vulnerabilities.
@@ -135,10 +132,8 @@ jobs:
           python -m pip install -r "$req" -r requirements-build.txt
       - name: Bundle YAMNet for TensorFlow
         if: matrix.edition == 'tensorflow'
-        run: |
-          curl -fsSL --retry 3 -o yamnet.tar.gz "$YAMNET_URL"
-          echo "$YAMNET_SHA256  yamnet.tar.gz" | shasum -a 256 -c -
-          mkdir yamnet_savedmodel && tar -xzf yamnet.tar.gz -C yamnet_savedmodel
+        # The checksum-verified archive in models/, unpacked where build/burp.spec bundles it from.
+        run: python -c "import burp_song; burp_song.unpack_yamnet('yamnet_savedmodel')"
       - name: Build the app
         env:
           EDITION: ${{ matrix.edition }}

@@ -114,8 +114,8 @@ python burp_gui.py
 ```
 
 For the TensorFlow detector, install `requirements-tensorflow.txt` instead
-(`tensorflow[and-cuda]` for NVIDIA GPUs on Linux). It downloads Google's YAMNet
-model once, about 17 MB, and checks it against a pinned checksum.
+(`tensorflow[and-cuda]` for NVIDIA GPUs on Linux). It uses Google's YAMNet model
+from `models/`, checked against a pinned checksum.
 
 ## Command line
 

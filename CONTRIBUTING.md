@@ -50,7 +50,7 @@ credential for this repository's `signing` environment.
 
 Dependabot covers the `requirements*.txt` files and GitHub Actions; `pip-audit`
 blocks releases with known vulnerabilities. It can't see the source archives pinned
-in `build/ffmpeg/build.sh` or the YAMNet archive in `release.yml` and `burp_song.py`.
+in `build/ffmpeg/build.sh` or the YAMNet archive in `models/` (checksum in `burp_song.py`).
 Check FFmpeg, x264, Rubber Band, nv-codec-headers, AMF, oneVPL, libva, libdrm and
 Vulkan-Headers for security releases now and then: update the URL and SHA-256
 (`sha256sum` the new archive) and let the release workflow rebuild.

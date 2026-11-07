@@ -35,8 +35,9 @@ from scipy.io import wavfile
 LOG = logging.getLogger('burp_song')
 
 # Detection (YAMNet works on 16 kHz mono audio, scoring 0.975 s windows every 0.48 s).
-# Google's YAMNet SavedModel for the TensorFlow engine (Apache 2.0), pinned by checksum.
-YAMNET_URL = 'https://tfhub.dev/google/yamnet/1?tf-hub-format=compressed'
+# Google's YAMNet SavedModel for the TensorFlow engine (https://tfhub.dev/google/yamnet/1,
+# Apache 2.0), kept in the repository and checked against this checksum.
+YAMNET_ARCHIVE = Path(__file__).resolve().parent/'models'/'yamnet-savedmodel.tar.gz'
 YAMNET_SHA256 = 'b80da2a1a56926fb0767205051a200dd7b3beaf3ea1ea126c42a53943996e5e0'
 DEFAULT_SOUND = 'Burping, eructation'
 SOUNDS_FILE = Path(__file__).with_name('yamnet_sounds.txt')  # YAMNet's class names, in order
@@ -218,30 +219,27 @@ def sounds_folder(sounds):
 
 _model = None
 ENGINES = ('auto', 'numpy', 'tensorflow')
-# The TensorFlow edition bundles YAMNet here; otherwise it's downloaded once into the user's cache.
+# The TensorFlow edition bundles YAMNet unpacked here; from source it's unpacked once into the user's cache.
 BUNDLED_SAVEDMODEL = Path(__file__).with_name('yamnet_savedmodel')
 
 
+def unpack_yamnet(folder):
+    """Check the repository's YAMNet archive and unpack it into `folder`."""
+    import tarfile
+    if hashlib.sha256(YAMNET_ARCHIVE.read_bytes()).hexdigest() != YAMNET_SHA256:
+        raise RuntimeError(f'{YAMNET_ARCHIVE} does not match its checksum')
+    with tarfile.open(YAMNET_ARCHIVE) as tar:
+        tar.extractall(folder, filter='data')
+
+
 def yamnet_savedmodel():
-    """Folder holding Google's YAMNet SavedModel, downloading and checking it the first time."""
+    """Folder holding Google's YAMNet SavedModel, unpacking it the first time."""
     if BUNDLED_SAVEDMODEL.is_dir():
         return BUNDLED_SAVEDMODEL
     cache = Path(os.environ.get('XDG_CACHE_HOME', Path.home()/'.cache'))/'burp-music-video-generator'
-    folder = cache/'yamnet_savedmodel'
+    folder = cache/f'yamnet_savedmodel-{YAMNET_SHA256[:12]}'
     if not (folder/'saved_model.pb').is_file():
-        import tarfile
-        import urllib.request
-        LOG.info('Downloading YAMNet for TensorFlow (about 17 MB, once)')
-        cache.mkdir(parents=True, exist_ok=True)
-        archive = cache/'yamnet.tar.gz'
-        with urllib.request.urlopen(YAMNET_URL, timeout=60) as response:
-            archive.write_bytes(response.read())
-        if hashlib.sha256(archive.read_bytes()).hexdigest() != YAMNET_SHA256:
-            archive.unlink()
-            raise RuntimeError('The downloaded YAMNet model does not match its checksum; try again later')
-        with tarfile.open(archive) as tar:
-            tar.extractall(folder, filter='data')
-        archive.unlink()
+        unpack_yamnet(folder)
     return folder
 
 

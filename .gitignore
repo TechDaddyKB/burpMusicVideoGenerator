@@ -12,7 +12,7 @@ dist/
 pyinstaller-work/
 ffmpeg-dist/
 yamnet_savedmodel/
-yamnet.tar.gz
+
 /out/
 /check/
 .coverage
