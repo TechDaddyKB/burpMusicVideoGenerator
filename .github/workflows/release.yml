@@ -99,7 +99,7 @@ jobs:
         include:
           - { platform: linux, os: ubuntu-22.04, ffmpeg: linux-x64 }
           - { platform: windows, os: windows-latest, ffmpeg: win-x64 }
-          - { platform: macos, os: macos-14, ffmpeg: osx-arm64 }
+          - { platform: macos, os: macos-latest, ffmpeg: osx-arm64 }
     runs-on: ${{ matrix.os }}
     # Windows code signing (Azure Artifact Signing) trusts only this repository's "signing" environment,
     # which only release tags may use.
