@@ -117,7 +117,7 @@ def pick_encoder(choice='auto'):
 # --- Twitch -------------------------------------------------------------------
 
 def ydl_options(cookies_from_browser=None, **extra):
-    options = dict(quiet=True, socket_timeout=30, retries=3, **extra)
+    options = {'quiet': True, 'socket_timeout': 30, 'retries': 3, **extra}
     if cookies_from_browser:
         options['cookiesfrombrowser'] = (cookies_from_browser,)
     return options

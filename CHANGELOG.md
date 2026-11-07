@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2 — 2026-11-07
+
+- Fix "dict() got multiple values for keyword argument 'quiet'" when downloading a
+  broadcast: every VOD download failed in 0.3.0 and 0.3.1. A new test runs the real
+  download code against a stand-in yt-dlp, which the other tests skipped.
+
 ## 0.3.1 — 2026-11-07
 
 - Fix "CERTIFICATE_VERIFY_FAILED" in the Linux downloads on distributions that keep

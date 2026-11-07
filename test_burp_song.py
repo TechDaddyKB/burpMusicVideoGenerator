@@ -192,6 +192,29 @@ class TwitchTests(FixtureTest):
         folder.mkdir(parents=True, exist_ok=True)
         return Path(shutil.copyfile(self.fixture, folder/f"{vod['id']}.mp4"))
 
+    def test_download_vod_passes_options_to_yt_dlp(self):
+        fixture, seen = self.fixture, {}
+
+        class Client:
+            def __init__(self, options):
+                seen.update(options)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                pass
+
+            def download(self, urls):
+                shutil.copyfile(fixture, seen['outtmpl'].replace('%(ext)s', 'mp4'))
+                return 0
+
+        with patch('yt_dlp.YoutubeDL', side_effect=Client):
+            path = bs.download_vod(self.vod(), self.tmp/'vods', 'firefox')
+        self.assertEqual(path.name, '123.mp4')
+        self.assertFalse(seen['quiet'])
+        self.assertEqual(seen['cookiesfrombrowser'], ('firefox',))
+
     def test_process_vod_saves_clips_then_deletes_vod(self):
         root = self.tmp/'work'
         with patch.object(bs, 'download_vod', side_effect=self.fake_download), \
