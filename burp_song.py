@@ -2,9 +2,10 @@
 """Turn a Twitch streamer's burps into a music video played from a MIDI file.
 
 1. Download the streamer's archived broadcasts (VODs), one at a time.
-2. Find burps with Google's YAMNet sound classifier and save each as a clip.
+2. Find burps (or any of the 521 sounds Google's YAMNet classifier knows) and
+   save each one as a clip.
 3. Delete the full VOD once its clips are saved.
-4. Play every MIDI note with a burp clip, pitch-shifted and stretched to fit,
+4. Play every MIDI note with a clip, pitch-shifted and stretched to fit,
    showing notes that sound together side by side, and save it as an MP4.
 """
 from __future__ import annotations
@@ -21,6 +22,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 import cv2
@@ -33,7 +35,8 @@ LOG = logging.getLogger('burp_song')
 
 # Detection (YAMNet works on 16 kHz mono audio, scoring 0.975 s windows every 0.48 s).
 YAMNET_URL = 'https://tfhub.dev/google/yamnet/1'
-BURP_CLASS = 'Burping, eructation'
+DEFAULT_SOUND = 'Burping, eructation'
+SOUNDS_FILE = Path(__file__).with_name('yamnet_sounds.txt')  # YAMNet's class names, in order
 DETECT_RATE = 16000
 HOP_SAMPLES = 7680
 WINDOW_SAMPLES = 15600
@@ -181,13 +184,36 @@ def download_vod(vod, folder, cookies_from_browser=None):
     return files[0]
 
 
-# --- Burp detection -----------------------------------------------------------
+# --- Sound detection ----------------------------------------------------------
+
+def sound_names():
+    """All 521 sounds YAMNet can detect, such as 'Burping, eructation' or 'Cough'."""
+    return SOUNDS_FILE.read_text(encoding='utf-8').splitlines()
+
+
+def resolve_sounds(names):
+    """Match sound names to YAMNet's list, ignoring case. Returns them sorted."""
+    known = {name.lower(): name for name in sound_names()}
+    sounds = set()
+    for name in names:
+        match = known.get(name.strip().lower())
+        if not match:
+            raise ValueError(f'Unknown sound {name!r}. Run with --list-sounds to see them all.')
+        sounds.add(match)
+    return sorted(sounds)
+
+
+def sounds_folder(sounds):
+    """A folder name for a set of sounds, e.g. 'burping-eructation+cough'."""
+    slug = '+'.join(re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-') for s in sorted(sounds))
+    return slug if len(slug) <= 80 else f'{slug[:60]}-{hashlib.sha256(slug.encode()).hexdigest()[:10]}'
+
 
 _model = None
 
 
 def load_yamnet():
-    """Load YAMNet once (weights download on first use) and find its burp class."""
+    """Load YAMNet once (weights download on first use). Returns (model, sound names)."""
     global _model
     if _model is None:
         import csv
@@ -203,12 +229,16 @@ def load_yamnet():
         model = hub.load(YAMNET_URL)
         with open(model.class_map_path().numpy().decode(), encoding='utf-8') as f:
             names = [row['display_name'] for row in csv.DictReader(f)]
-        _model = model, names.index(BURP_CLASS)
+        _model = model, names
     return _model
 
 
-def burp_scores(video, model, class_index, chunk_seconds=60):
-    """Score the whole video's audio, one 0.48 s step at a time, in bounded chunks."""
+def sound_scores(video, model, class_indices, chunk_seconds=60):
+    """Score the video's audio every 0.48 s, in bounded chunks.
+
+    Each score is the highest of the chosen sounds' scores at that moment.
+    """
+    class_indices = list(np.atleast_1d(class_indices))
     chunk = max(1, round(chunk_seconds/HOP_SECONDS))*HOP_SAMPLES
     lookahead = WINDOW_SAMPLES  # so windows at a chunk's end see real audio, not padding
     cmd = ['ffmpeg', '-nostdin', '-v', 'error', '-i', str(video), '-map', '0:a:0', '-vn',
@@ -227,7 +257,7 @@ def burp_scores(video, model, class_index, chunk_seconds=60):
                 frames = math.ceil(len(buffer)/HOP_SAMPLES) if last else chunk//HOP_SAMPLES
                 needed = (frames-1)*HOP_SAMPLES+WINDOW_SAMPLES
                 waveform = np.pad(buffer, (0, max(0, needed-len(buffer))))
-                result = np.asarray(model(waveform)[0].numpy())[:frames, class_index]
+                result = np.asarray(model(waveform)[0].numpy())[:frames][:, class_indices].max(axis=1)
                 scores.extend(float(s) for s in result)
                 LOG.info('%s: scanned %.0f minutes', video.name, len(scores)*HOP_SECONDS/60)
                 if last:
@@ -242,18 +272,18 @@ def burp_scores(video, model, class_index, chunk_seconds=60):
     return scores
 
 
-def find_burps(scores, confidence):
+def find_sounds(scores, confidence):
     """Merge overlapping windows that score at least `confidence` into (start, end, peak)."""
-    burps = []
+    found = []
     for i, score in enumerate(scores):
         if score < confidence:
             continue
         start, end = i*HOP_SECONDS, i*HOP_SECONDS+WINDOW_SECONDS
-        if burps and start <= burps[-1][1]:
-            burps[-1] = (burps[-1][0], end, max(burps[-1][2], score))
+        if found and start <= found[-1][1]:
+            found[-1] = (found[-1][0], end, max(found[-1][2], score))
         else:
-            burps.append((start, end, score))
-    return burps
+            found.append((start, end, score))
+    return found
 
 
 def cut_clip(video, start, end, target, encoder=CPU_ENCODER):
@@ -268,25 +298,26 @@ def cut_clip(video, start, end, target, encoder=CPU_ENCODER):
     temp.replace(target)
 
 
-def process_vod(vod, root, confidence, cookies_from_browser=None, encoder=CPU_ENCODER):
-    """Download one VOD, save its burp clips, then delete the VOD. Returns the clips."""
-    folder = root/'clips'/vod['id']
+def process_vod(vod, root, confidence, sounds=(DEFAULT_SOUND,), cookies_from_browser=None, encoder=CPU_ENCODER):
+    """Download one VOD, save clips of the chosen sounds, then delete the VOD. Returns the clips."""
+    folder = root/'clips'/sounds_folder(sounds)/vod['id']
     done = folder/'done.json'
     if done.exists():
         LOG.info('Already processed %s; reusing its clips', vod['id'])
         return existing_clips(folder)
     LOG.info('Processing %s %s %s', vod['date'], vod['url'], vod['title'])
     video = download_vod(vod, root/'vods', cookies_from_browser)
-    burps = find_burps(burp_scores(video, *load_yamnet()), confidence)
-    LOG.info('%s: found %d burps', vod['id'], len(burps))
+    model, names = load_yamnet()
+    found = find_sounds(sound_scores(video, model, [names.index(s) for s in sounds]), confidence)
+    LOG.info('%s: found %d clips of %s', vod['id'], len(found), ', '.join(sounds))
     clips = []
-    for number, (start, end, score) in enumerate(burps, 1):
-        clip = folder/f'burp-{number:04}.mp4'
+    for number, (start, end, score) in enumerate(found, 1):
+        clip = folder/f'clip-{number:04}.mp4'
         cut_clip(video, start, end, clip, encoder)
         clips.append(clip)
     folder.mkdir(parents=True, exist_ok=True)
-    done.write_text(json.dumps(dict(vod=vod, confidence=confidence, burps=[
-        dict(clip=c.name, start=s, end=e, score=sc) for c, (s, e, sc) in zip(clips, burps)]), indent=2))
+    done.write_text(json.dumps(dict(vod=vod, sounds=list(sounds), confidence=confidence, clips=[
+        dict(clip=c.name, start=s, end=e, score=sc) for c, (s, e, sc) in zip(clips, found)]), indent=2))
     video.unlink()
     LOG.info('Deleted full VOD %s', video.name)
     return clips
@@ -543,8 +574,12 @@ def parse_args(argv=None):
     p.add_argument('--output', type=Path, default=Path('burp-song.mp4'), help='Output MP4 (default: burp-song.mp4)')
     p.add_argument('--from-date', type=iso_date, help='First broadcast date to download, YYYY-MM-DD (UTC)')
     p.add_argument('--to-date', type=iso_date, help='Last broadcast date to download, YYYY-MM-DD (UTC)')
+    p.add_argument('--sound', dest='sounds', action='append', metavar='NAME',
+                   help=f'A sound to detect; repeat for several (default: "{DEFAULT_SOUND}"). '
+                        'See --list-sounds for all 521.')
+    p.add_argument('--list-sounds', action='store_true', help='List the sounds you can detect, then exit')
     p.add_argument('--confidence', type=float, default=.35,
-                   help='Burp detection score from 0 to 1; higher finds fewer, surer burps (default: .35)')
+                   help='Detection score from 0 to 1; higher finds fewer, surer sounds (default: .35)')
     p.add_argument('--all', action='store_true',
                    help='Without dates: download the whole VOD archive even if clips already exist')
     p.add_argument('--clips-dir', type=Path, help='Use the MP4 clips in this folder instead of downloading')
@@ -555,7 +590,14 @@ def parse_args(argv=None):
                    help='Encode video on the CPU even if a GPU encoder is available')
     p.add_argument('--cookies-from-browser', choices=['firefox', 'chrome', 'chromium', 'brave', 'opera', 'edge'],
                    help="Use this browser's Twitch login (for subscriber-only VODs)")
+    if '--list-sounds' in (sys.argv[1:] if argv is None else argv):
+        print('\n'.join(sound_names()))
+        raise SystemExit(0)
     args = p.parse_args(argv)
+    try:
+        args.sounds = resolve_sounds(args.sounds or [DEFAULT_SOUND])
+    except ValueError as exc:
+        p.error(str(exc))
     args.username = args.username.lower()
     if not re.fullmatch(r'[a-z0-9_]{1,25}', args.username):
         p.error('give a Twitch username, not a URL')
@@ -583,21 +625,23 @@ def main(argv=None):
         if not shutil.which(tool):
             raise RuntimeError(f'{tool} is required; install FFmpeg first')
     root = args.work_dir/args.username
+    library = root/'clips'/sounds_folder(args.sounds)
+    LOG.info('Detecting: %s', ', '.join(args.sounds))
     encoder = pick_encoder('cpu' if args.cpu_only else 'auto')
     if args.clips_dir:
         clips = existing_clips(args.clips_dir)
-    elif args.from_date or args.to_date or args.all or not existing_clips(root/'clips'):
+    elif args.from_date or args.to_date or args.all or not existing_clips(library):
         vods = list_vods(args.username, args.from_date, args.to_date, args.cookies_from_browser)
         LOG.info('Found %d broadcasts', len(vods))
         clips = []
         for vod in vods:
-            clips += process_vod(vod, root, args.confidence, args.cookies_from_browser, encoder)
+            clips += process_vod(vod, root, args.confidence, args.sounds, args.cookies_from_browser, encoder)
     else:
-        clips = existing_clips(root/'clips')
-        LOG.info('Using %d existing clips from %s', len(clips), root/'clips')
+        clips = existing_clips(library)
+        LOG.info('Using %d existing clips from %s', len(clips), library)
     if not clips:
-        raise ValueError('No burp clips found, so there is nothing to play. '
-                         'Try other dates or a lower --confidence.')
+        raise ValueError('No clips found, so there is nothing to play. '
+                         'Try other dates, other sounds or a lower --confidence.')
     make_song(clips, args.midi, args.output, root/'cache', args.seconds, encoder)
 
 

@@ -22,10 +22,16 @@ class FakeScores:
         return self.data
 
 
+BURP = 53  # 'Burping, eructation' in YAMNet's list
+COUGH = 42
+
+
 def constant_model(audio):
-    """Stand-in for YAMNet: one frame per 0.48 s step, every frame a confident burp."""
+    """Stand-in for YAMNet: one frame per 0.48 s step; every frame a confident burp, a faint cough."""
     count = max(0, 1+(len(audio)-bs.WINDOW_SAMPLES)//bs.HOP_SAMPLES)
-    return FakeScores(np.full((count, 1), .9)), None, None
+    scores = np.zeros((count, 521))
+    scores[:, BURP], scores[:, COUGH] = .9, .2
+    return FakeScores(scores), None, None
 
 
 def save_midi(path, *tracks):
@@ -127,19 +133,36 @@ class MidiAndAudioTests(FixtureTest):
 
 
 class DetectionTests(FixtureTest):
-    def test_find_burps_merges_overlapping_windows(self):
-        burps = bs.find_burps([.1, .9, .8, .1, .1, .5], .35)
+    def test_find_sounds_merges_overlapping_windows(self):
+        burps = bs.find_sounds([.1, .9, .8, .1, .1, .5], .35)
         self.assertEqual(len(burps), 2)
         self.assertAlmostEqual(burps[0][0], bs.HOP_SECONDS)
         self.assertAlmostEqual(burps[0][1], 2*bs.HOP_SECONDS+bs.WINDOW_SECONDS)
         self.assertEqual(burps[0][2], .9)
-        self.assertEqual(bs.find_burps([.1, .2], .35), [])
+        self.assertEqual(bs.find_sounds([.1, .2], .35), [])
 
     def test_scores_cover_whole_video_across_chunks(self):
-        whole = bs.burp_scores(self.fixture, constant_model, 0, chunk_seconds=60)
-        chunked = bs.burp_scores(self.fixture, constant_model, 0, chunk_seconds=.96)
+        whole = bs.sound_scores(self.fixture, constant_model, BURP, chunk_seconds=60)
+        chunked = bs.sound_scores(self.fixture, constant_model, BURP, chunk_seconds=.96)
         self.assertEqual(len(whole), math.ceil(3/bs.HOP_SECONDS))
         self.assertEqual(len(chunked), len(whole))
+
+    def test_several_sounds_use_the_highest_score(self):
+        cough = bs.sound_scores(self.fixture, constant_model, [COUGH])
+        both = bs.sound_scores(self.fixture, constant_model, [COUGH, BURP])
+        self.assertTrue(all(abs(s-.2) < 1e-6 for s in cough))
+        self.assertTrue(all(abs(s-.9) < 1e-6 for s in both))
+
+    def test_sound_names_match_and_make_stable_folders(self):
+        names = bs.sound_names()
+        self.assertEqual(len(names), 521)
+        self.assertEqual(names[BURP], bs.DEFAULT_SOUND)
+        self.assertEqual(bs.resolve_sounds(['cough', 'BURPING, ERUCTATION', 'Cough']),
+                         ['Burping, eructation', 'Cough'])
+        with self.assertRaisesRegex(ValueError, 'Unknown sound'):
+            bs.resolve_sounds(['Belch of doom'])
+        self.assertEqual(bs.sounds_folder(['Cough', 'Burping, eructation']), 'burping-eructation+cough')
+        self.assertLessEqual(len(bs.sounds_folder(names[:40])), 80)
 
 
 class TwitchTests(FixtureTest):
@@ -180,23 +203,32 @@ class TwitchTests(FixtureTest):
     def test_process_vod_saves_clips_then_deletes_vod(self):
         root = self.tmp/'work'
         with patch.object(bs, 'download_vod', side_effect=self.fake_download), \
-             patch.object(bs, 'load_yamnet', return_value=(constant_model, 0)):
+             patch.object(bs, 'load_yamnet', return_value=(constant_model, bs.sound_names())):
             clips = bs.process_vod(self.vod(), root, .35)
         self.assertTrue(clips and all(c.is_file() for c in clips))
         self.assertFalse((root/'vods'/'123.mp4').exists())
-        self.assertTrue((root/'clips'/'123'/'done.json').exists())
+        self.assertTrue((root/'clips'/'burping-eructation'/'123'/'done.json').exists())
         with patch.object(bs, 'download_vod', side_effect=AssertionError('must not download again')):
             self.assertEqual(bs.process_vod(self.vod(), root, .35), clips)
+
+    def test_other_sounds_get_their_own_clips(self):
+        root = self.tmp/'work'
+        with patch.object(bs, 'download_vod', side_effect=self.fake_download), \
+             patch.object(bs, 'load_yamnet', return_value=(constant_model, bs.sound_names())):
+            coughs = bs.process_vod(self.vod(), root, .35, ['Cough'])
+            both = bs.process_vod(self.vod(), root, .35, ['Burping, eructation', 'Cough'])
+        self.assertEqual(coughs, [])  # the stand-in's coughs are too faint
+        self.assertTrue(both and all('burping-eructation+cough' in str(c) for c in both))
 
     def test_failed_clip_keeps_vod_for_retry(self):
         root = self.tmp/'work'
         with patch.object(bs, 'download_vod', side_effect=self.fake_download), \
-             patch.object(bs, 'load_yamnet', return_value=(constant_model, 0)), \
+             patch.object(bs, 'load_yamnet', return_value=(constant_model, bs.sound_names())), \
              patch.object(bs, 'cut_clip', side_effect=RuntimeError('encoder broke')):
             with self.assertRaisesRegex(RuntimeError, 'encoder broke'):
                 bs.process_vod(self.vod(), root, .35)
         self.assertTrue((root/'vods'/'123.mp4').exists())
-        self.assertFalse((root/'clips'/'123'/'done.json').exists())
+        self.assertFalse((root/'clips'/'burping-eructation'/'123'/'done.json').exists())
 
 
 class EncoderTests(unittest.TestCase):
@@ -258,6 +290,15 @@ class GuiFormTests(unittest.TestCase):
                 self.gui.build_argv(user, start, end, .35, str(self.midi), str(self.tmp/'o.mp4'))
         with self.assertRaisesRegex(ValueError, 'MIDI'):
             self.gui.build_argv('x', '', '', .35, '', str(self.tmp/'o.mp4'))
+        with self.assertRaisesRegex(ValueError, 'at least one sound'):
+            self.gui.build_argv('x', '', '', .35, str(self.midi), str(self.tmp/'o.mp4'), sounds=[])
+
+    def test_chosen_sounds_are_passed_on(self):
+        argv, _ = self.gui.build_argv('x', '', '', .35, str(self.midi), str(self.tmp/'o.mp4'),
+                                      sounds=['Laughter', 'Burping, eructation'])
+        self.assertEqual([argv[i+1] for i, a in enumerate(argv) if a == '--sound'],
+                         ['Burping, eructation', 'Laughter'])
+        self.assertEqual(bs.parse_args(argv).sounds, ['Burping, eructation', 'Laughter'])
 
 
 class CommandLineTests(FixtureTest):
@@ -269,7 +310,7 @@ class CommandLineTests(FixtureTest):
                      '--output', str(self.tmp/'out.mp4')]
 
     def test_no_dates_with_existing_clips_skips_twitch(self):
-        clip = self.tmp/'work'/'streamer'/'clips'/'1'/'burp-0001.mp4'
+        clip = self.tmp/'work'/'streamer'/'clips'/'burping-eructation'/'1'/'clip-0001.mp4'
         clip.parent.mkdir(parents=True)
         shutil.copyfile(self.fixture, clip)
         with patch.object(bs, 'list_vods', side_effect=AssertionError('no network')), \
@@ -279,7 +320,7 @@ class CommandLineTests(FixtureTest):
 
     def test_no_dates_without_clips_downloads_everything(self):
         with patch.object(bs, 'list_vods', return_value=[]) as list_vods:
-            with self.assertRaisesRegex(ValueError, 'No burp clips'):
+            with self.assertRaisesRegex(ValueError, 'No clips'):
                 bs.main(self.base)
         self.assertEqual(list_vods.call_args.args[1:3], (None, None))
 
@@ -289,10 +330,18 @@ class CommandLineTests(FixtureTest):
                 bs.main(self.base+['--from-date', '2026-10-01', '--to-date', '2026-10-31'])
         self.assertEqual(list_vods.call_args.args[1:3], (date(2026, 10, 1), date(2026, 10, 31)))
 
+    def test_sound_choices(self):
+        self.assertEqual(bs.parse_args(self.base).sounds, [bs.DEFAULT_SOUND])
+        args = bs.parse_args(self.base+['--sound', 'cough', '--sound', 'Laughter'])
+        self.assertEqual(args.sounds, ['Cough', 'Laughter'])
+        with patch('sys.stdout') as out, self.assertRaises(SystemExit):
+            bs.parse_args(['--list-sounds'])
+        self.assertIn('Burping, eructation', ''.join(c.args[0] for c in out.write.call_args_list))
+
     def test_bad_arguments_are_rejected(self):
         for extra in (['--confidence', '0'], ['--confidence', '1.5'],
                       ['--from-date', '2026-10-31', '--to-date', '2026-10-01'],
-                      ['--clips-dir', '.', '--all']):
+                      ['--clips-dir', '.', '--all'], ['--sound', 'Belch of doom']):
             with self.subTest(extra=extra), self.assertRaises(SystemExit), \
                  patch('sys.stderr'):
                 bs.parse_args(self.base+extra)

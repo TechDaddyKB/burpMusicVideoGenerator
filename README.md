@@ -17,7 +17,8 @@ decision. Everybody wins.
 1. Lists the streamer's archived broadcasts (VODs) on Twitch, filtered by your dates.
 2. Downloads one VOD at a time.
 3. Finds burps with Google's [YAMNet](https://www.tensorflow.org/hub/tutorials/yamnet)
-   sound classifier and saves each one as a short video clip.
+   sound classifier and saves each one as a short video clip. Burps are the
+   default, but you can pick any of the 521 sounds YAMNet knows, or several.
 4. Deletes the full VOD once its clips are saved.
 5. Plays every MIDI note with the burp clip closest in length, pitch-shifted and
    stretched to fit, and saves the result as an MP4.
@@ -86,8 +87,8 @@ pip install -r requirements.txt
 python burp_gui.py
 ```
 
-Search for a streamer and click them, optionally set a date range, drag the
-confidence slider, choose a MIDI file and where to save the video, then press
+Search for a streamer and click them, choose the sounds to detect (burps are
+already selected), optionally set a date range, drag the confidence slider, choose a MIDI file and where to save the video, then press
 **Make the video**. The log shows progress, and **Play video** opens the result.
 Videos are saved in the `outputs` folder by default.
 
@@ -107,6 +108,14 @@ python burp_song.py emmytheaxolotl --midi song.mid \
   --output burp-symphony.mp4
 ```
 
+Laughs and coughs instead of burps? Pick any sounds YAMNet knows. A moment counts
+if any of them is detected:
+
+```bash
+python burp_song.py emmytheaxolotl --midi song.mid --sound Laughter --sound Cough
+python burp_song.py --list-sounds    # all 521, e.g. Sneeze, Screaming, Bark, Applause
+```
+
 Leave out the dates to reuse the clips you already have. If there aren't any yet,
 it downloads the streamer's whole VOD archive instead:
 
@@ -119,7 +128,9 @@ python burp_song.py emmytheaxolotl --midi another-song.mid --output encore.mp4
 | `--midi FILE` | The song to play. Required. |
 | `--output FILE` | The MP4 to create (default `burp-song.mp4`). It won't overwrite an existing file. |
 | `--from-date`, `--to-date` | Only download broadcasts that started in this range (`YYYY-MM-DD`, UTC, inclusive). Either one can be used alone. |
-| `--confidence N` | How sure the detector must be that a sound is a burp, from 0 to 1 (default `.35`). Higher means fewer, surer burps. |
+| `--sound NAME` | A sound to detect, repeatable (default `"Burping, eructation"`). Names ignore case. |
+| `--list-sounds` | Print every sound you can detect. |
+| `--confidence N` | How sure the detector must be, from 0 to 1 (default `.35`). Higher means fewer, surer clips. Other sounds may need a different value. |
 | `--all` | Without dates, download the whole archive even when clips already exist. |
 | `--clips-dir DIR` | Use the MP4 clips in another folder instead of downloading. |
 | `--seconds N` | Render only the first N seconds, for a quick preview. |
@@ -135,16 +146,19 @@ can be downloaded. Broadcasts that are still live are skipped.
 
 ```text
 burp-work/emmytheaxolotl/
-  clips/<vod-id>/burp-0001.mp4   the burp clips (kept)
-  clips/<vod-id>/done.json       where each burp came from and its score
-  vods/                          the VOD being processed (deleted when done)
-  cache/                         audio and video cache for rendering
+  clips/burping-eructation/<vod-id>/clip-0001.mp4   the clips (kept)
+  clips/burping-eructation/<vod-id>/done.json       where each came from and its score
+  clips/cough+laughter/...                          other sound choices get their own folder
+  vods/                                             the VOD being processed (deleted when done)
+  cache/                                            audio and video cache for rendering
 ```
 
 A full VOD is only deleted after all its clips are saved, so if something fails
 you can rerun the same command and it carries on. Broadcasts that are already
 done are skipped. Because the VOD is gone, changing `--confidence` later only
-affects new broadcasts; delete a broadcast's `clips/<vod-id>` folder to redo it.
+affects new broadcasts; delete a broadcast's `<vod-id>` folder to redo it.
+Choosing different sounds starts a new clip folder, so those broadcasts are
+downloaded again.
 
 The `cache` folder can grow to several GB. It's safe to delete when nothing is
 rendering. Keep the `clips` folder: it's what future songs are made from.
@@ -175,6 +189,8 @@ push. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Built with [yt-dlp](https://github.com/yt-dlp/yt-dlp), YAMNet, FFmpeg and
 Rubber Band, NumPy, SciPy, Mido, and OpenCV, which keep their own licenses.
+`yamnet_sounds.txt` lists YAMNet's sound classes, from the
+[AudioSet ontology](https://research.google.com/audioset/ontology/index.html).
 Bring your own MIDI and footage you can use. Bring your own sense of humor, too;
 we spent the entire budget on the bass section.
 

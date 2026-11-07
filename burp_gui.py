@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Desktop app for burp_song.py: pick a streamer, dates, confidence and output, then go.
+"""Desktop app for burp_song.py: pick a streamer, sounds, dates, confidence and output, then go.
 
 Run `python burp_gui.py`.
 """
@@ -27,7 +27,8 @@ WORK_DIR = HERE/'burp-work'
 OUTPUT_DIR = HERE/'outputs'
 
 
-def build_argv(username, from_date, to_date, confidence, midi, output, download_all=False, cpu_only=False):
+def build_argv(username, from_date, to_date, confidence, midi, output, download_all=False, cpu_only=False,
+               sounds=(bs.DEFAULT_SOUND,)):
     """Check the form and turn it into burp_song.py arguments. Raises ValueError with a friendly message."""
     username = username.strip().lower()
     if not username:
@@ -42,6 +43,8 @@ def build_argv(username, from_date, to_date, confidence, midi, output, download_
                 raise ValueError(f'{label} date must look like 2026-10-31.') from None
     if len(dates) == 2 and dates['From'] > dates['To']:
         raise ValueError('The From date must be on or before the To date.')
+    if not sounds:
+        raise ValueError('Pick at least one sound to detect.')
     if not midi or not Path(midi).is_file():
         raise ValueError('Choose a MIDI file.')
     if not output.strip():
@@ -59,6 +62,8 @@ def build_argv(username, from_date, to_date, confidence, midi, output, download_
         argv += ['--to-date', dates['To'].isoformat()]
     if download_all and not dates:
         argv.append('--all')
+    for sound in sorted(sounds):
+        argv += ['--sound', sound]
     if cpu_only:
         argv.append('--cpu-only')
     return argv, output
@@ -88,8 +93,8 @@ class App:
         self.running = False
         self.output = None
         root.title('Burp Music Video Generator')
-        root.minsize(620, 720)
-        root.geometry('720x860')
+        root.minsize(620, 820)
+        root.geometry('720x960')
         style = ttk.Style(root)
         style.configure('Treeview', rowheight=40)
         title_font = tkfont.nametofont('TkDefaultFont').copy()
@@ -115,7 +120,7 @@ class App:
         entry.bind('<Return>', lambda e: self.search())
         self.search_button = ttk.Button(box, text='Search', command=self.search)
         self.search_button.grid(row=0, column=1, padx=(6, 0))
-        self.results = ttk.Treeview(box, columns=('followers', 'live'), height=5, selectmode='browse')
+        self.results = ttk.Treeview(box, columns=('followers', 'live'), height=4, selectmode='browse')
         self.results.heading('#0', text='Channel')
         self.results.heading('followers', text='Followers')
         self.results.heading('live', text='')
@@ -127,6 +132,29 @@ class App:
         self.streamer = tk.StringVar()
         self.streamer_label = ttk.Label(box, text='No streamer selected. Search, then click one.', style='Hint.TLabel')
         self.streamer_label.grid(row=2, column=0, columnspan=2, sticky='w', pady=(6, 0))
+
+        # Sounds
+        box = ttk.LabelFrame(frame, text='Sounds to detect', padding=10)
+        box.grid(sticky='nsew', pady=4)
+        frame.rowconfigure(3, weight=1)
+        box.columnconfigure(0, weight=1)
+        box.rowconfigure(1, weight=1)
+        self.all_sounds = bs.sound_names()
+        self.sounds = {bs.DEFAULT_SOUND}
+        self.sound_filter = tk.StringVar()
+        self.sound_filter.trace_add('write', lambda *a: self.show_sounds())
+        ttk.Entry(box, textvariable=self.sound_filter).grid(row=0, column=0, sticky='ew')
+        ttk.Button(box, text='Just burps', command=self.reset_sounds).grid(row=0, column=1, padx=(6, 0))
+        self.sound_list = tk.Listbox(box, selectmode='multiple', height=5, exportselection=False,
+                                     activestyle='none', selectbackground='#4a6984', selectforeground='white')
+        self.sound_list.grid(row=1, column=0, columnspan=2, sticky='nsew', pady=(8, 0))
+        scroll = ttk.Scrollbar(box, orient='vertical', command=self.sound_list.yview)
+        scroll.grid(row=1, column=2, sticky='ns', pady=(8, 0))
+        self.sound_list.configure(yscrollcommand=scroll.set)
+        self.sound_list.bind('<<ListboxSelect>>', self.pick_sounds)
+        self.sounds_label = ttk.Label(box, wraplength=560)
+        self.sounds_label.grid(row=2, column=0, columnspan=3, sticky='w', pady=(6, 0))
+        self.show_sounds()
 
         # Broadcasts
         box = ttk.LabelFrame(frame, text='Broadcasts (optional)', padding=10)
@@ -147,15 +175,15 @@ class App:
             var.trace_add('write', lambda *a: self.update_all_check())
 
         # Detection
-        box = ttk.LabelFrame(frame, text='Burp detection confidence', padding=10)
+        box = ttk.LabelFrame(frame, text='Detection confidence', padding=10)
         box.grid(sticky='ew', pady=4)
         box.columnconfigure(1, weight=1)
         self.confidence = tk.DoubleVar(value=.35)
         self.confidence_label = ttk.Label(box, width=5)
-        ttk.Label(box, text='More burps', style='Hint.TLabel').grid(row=0, column=0)
+        ttk.Label(box, text='More clips', style='Hint.TLabel').grid(row=0, column=0)
         ttk.Scale(box, from_=.05, to=.95, variable=self.confidence,
                   command=lambda v: self.show_confidence()).grid(row=0, column=1, sticky='ew', padx=8)
-        ttk.Label(box, text='Surer burps', style='Hint.TLabel').grid(row=0, column=2)
+        ttk.Label(box, text='Surer clips', style='Hint.TLabel').grid(row=0, column=2)
         self.confidence_label.grid(row=0, column=3, padx=(8, 0))
         self.show_confidence()
 
@@ -272,6 +300,33 @@ class App:
             self.streamer.set(selection[0])
             self.streamer_label.configure(text=f'Selected: {selection[0]}', style='TLabel')
 
+    # --- sounds ---------------------------------------------------------------
+
+    def show_sounds(self):
+        """List the sounds matching the filter, keeping earlier choices selected."""
+        words = self.sound_filter.get().lower().split()
+        self.visible_sounds = [s for s in self.all_sounds if all(w in s.lower() for w in words)]
+        self.sound_list.delete(0, 'end')
+        for i, sound in enumerate(self.visible_sounds):
+            self.sound_list.insert('end', sound)
+            if sound in self.sounds:
+                self.sound_list.selection_set(i)
+        self.update_sounds_label()
+
+    def pick_sounds(self, event=None):
+        chosen = set(self.sound_list.curselection())
+        for i, sound in enumerate(self.visible_sounds):
+            (self.sounds.add if i in chosen else self.sounds.discard)(sound)
+        self.update_sounds_label()
+
+    def reset_sounds(self):
+        self.sounds = {bs.DEFAULT_SOUND}
+        self.sound_filter.set('')
+
+    def update_sounds_label(self):
+        text = '; '.join(sorted(self.sounds)) if self.sounds else 'nothing yet'
+        self.sounds_label.configure(text=f'Detecting: {text}. Type above to filter; click to add or remove.')
+
     # --- files ----------------------------------------------------------------
 
     def choose_midi(self):
@@ -295,7 +350,7 @@ class App:
         try:
             argv, output = build_argv(self.streamer.get(), self.from_date.get(), self.to_date.get(),
                                       self.confidence.get(), self.midi.get(), self.output_path.get(),
-                                      self.download_all.get(), self.cpu_only.get())
+                                      self.download_all.get(), self.cpu_only.get(), sorted(self.sounds))
         except ValueError as exc:
             messagebox.showwarning('Almost there', str(exc), parent=self.root)
             return

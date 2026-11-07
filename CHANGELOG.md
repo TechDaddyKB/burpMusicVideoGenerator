@@ -2,13 +2,16 @@
 
 ## Unreleased
 
+- Detect any of YAMNet's 521 sounds, or several at once, instead of only burps
+  (still the default): `--sound NAME` (repeatable), `--list-sounds`, and a
+  searchable multi-select list in the app. Clips are now stored per sound choice
+  in `clips/<sounds>/<vod-id>/clip-NNNN.mp4`. Bundle `yamnet_sounds.txt`.
 - Add `burp_gui.py`, a desktop app (Tkinter) with Twitch streamer search,
   optional dates, a confidence slider, MIDI and output pickers, and a progress log.
 - Encode video on the GPU when possible (NVENC, Quick Sync, AMF, VideoToolbox,
   VAAPI or Vulkan, whichever works first), falling back to the CPU. Add `--cpu-only`.
 - Let TensorFlow grow GPU memory as needed when YAMNet runs on a GPU.
 - Add `search_channels()` using Twitch's public web API.
-
 - Simplify the tool into one script, `burp_song.py`, replacing `burp_song_v2.py`
   and its helper modules `burp_song.py` (old renderer) and `sneeze_compilation.py`.
 - New options: `--confidence` (was `--burp-threshold`), `--all`, and dates that
