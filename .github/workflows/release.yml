@@ -88,6 +88,8 @@ jobs:
 
   app:
     needs: [audit, ffmpeg]
+    # Linux TensorFlow is the slowest (~25 min; its Flatpak alone ~13 min). Fail a real hang, not after 6 h.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
