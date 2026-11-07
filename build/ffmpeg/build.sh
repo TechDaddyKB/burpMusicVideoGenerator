@@ -106,6 +106,8 @@ echo "x264"
 
 echo "Rubber Band"
 ( cd "$work/rubberband"
+  # 4.0.0's mathmisc.cpp uses size_t without <cstddef>, which newer libc++ (Xcode 26) rejects.
+  export CXXFLAGS="$CXXFLAGS -include cstddef"
   quiet meson setup build ${meson_cross[@]+"${meson_cross[@]}"} --prefix="$prefix" --libdir=lib --buildtype=release \
     --default-library=static -Dfft=builtin -Dresampler=builtin -Djni=disabled -Dladspa=disabled -Dlv2=disabled \
     -Dvamp=disabled -Dcmdline=disabled -Dtests=disabled
