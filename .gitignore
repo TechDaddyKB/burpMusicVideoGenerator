@@ -10,7 +10,11 @@ venv/
 build/
 dist/
 .coverage
+coverage.xml
 htmlcov/
+.tox/
+.nox/
+.ipynb_checkpoints/
 
 # Inputs, generated media and sample libraries
 *.mp4
@@ -42,6 +46,11 @@ inputs/
 outputs/
 media/
 
+# Temporary render/encode directories left behind by an interrupted run
+burp-render-*/
+.encode-*/
+.sneeze-join-*/
+
 # Local credentials and editor state
 .env
 .env.*
@@ -53,5 +62,8 @@ cookies*.txt
 *.db
 .idea/
 .vscode/
+.claude/settings.local.json
+*.swp
+*~
 .DS_Store
 Thumbs.db

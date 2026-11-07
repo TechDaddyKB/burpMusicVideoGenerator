@@ -273,8 +273,8 @@ def render_video(notes, clips, audio_path, output, seconds, args):
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--midi', type=Path, default=Path('Never-Gonna-Give-You-Up-3.mid'))
-    p.add_argument('--playlist', type=Path, default=Path('OctoberBurps.xspf'))
+    p.add_argument('--midi', type=Path, required=True, help='MIDI file to arrange')
+    p.add_argument('--playlist', type=Path, help='XSPF playlist of source clips (required unless --inspect)')
     p.add_argument('--output', type=Path, default=Path('burp-song.mp4'))
     p.add_argument('--tracks', help='Comma-separated zero-based MIDI track indices')
     p.add_argument('--channels', help='Comma-separated zero-based MIDI channels (0-15)')
@@ -300,6 +300,8 @@ def main(argv=None):
                 if count:
                     print(f'    channel {channel:2}: {count} notes' + (' (percussion)' if channel == 9 else ''))
         return
+    if args.playlist is None:
+        p.error('--playlist is required unless --inspect is given')
     if args.start < 0 or (args.seconds is not None and args.seconds <= 0):
         p.error('start must be nonnegative and seconds positive')
     if args.fps < 1 or min(args.width, args.height) < 32 or args.width % 2 or args.height % 2:

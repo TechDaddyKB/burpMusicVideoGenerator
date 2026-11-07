@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add the MIT License.
+- `burp_song.py` now requires `--midi`, and `--playlist` unless `--inspect` is
+  given, instead of defaulting to personal sample filenames.
+- Ignore temporary render/encode folders from interrupted runs and common
+  test-tool and editor leftovers.
+
 ## 0.2.0 — 2026-11-07
 
 - Package the v2 generator, required helper modules, tests and requirements in a

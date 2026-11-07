@@ -252,3 +252,8 @@ Built with [yt-dlp](https://github.com/yt-dlp/yt-dlp),
 NumPy, SciPy, Mido, and OpenCV. The model and dependencies retain their own licenses.
 Bring your own MIDI and footage you can use. Bring your own sense of humor, too;
 we spent the entire budget on the bass section.
+
+## License
+
+This project's code is released under the [MIT License](LICENSE). It does not
+cover MIDI files, broadcasts, or clips you process with it.
