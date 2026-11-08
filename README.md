@@ -76,7 +76,7 @@ and where to save the video, then press **Make the video**. The log shows progre
 and **Play video** opens the result.
 
 Downloads save videos to your Videos folder (Movies on a Mac) and keep clips in your
-user data folder. Run from source, both go next to the code (`outputs/` and `burp-work/`).
+user data folder ([exact folders per OS](#where-things-go)). Run from source, both go next to the code (`outputs/` and `burp-work/`).
 
 Streamer search uses Twitch's public website API, which Twitch could change. If
 search stops working, type the exact username and press Search to use it anyway.
@@ -170,6 +170,20 @@ can be downloaded. Broadcasts that are still live are skipped; we don't burp-sha
 works in progress.
 
 ## Where things go
+
+The downloaded app keeps its clips (and everything else it works with) in a `work`
+folder in your user data folder, and saves finished videos to your Videos folder:
+
+| You're on | Clips and work files | Finished videos |
+| --- | --- | --- |
+| Windows | `%LOCALAPPDATA%\Burp Music Video Generator\work\` | `Videos\Burp Music Video Generator\` |
+| macOS | `~/Library/Application Support/Burp Music Video Generator/work/` | `~/Movies/Burp Music Video Generator/` |
+| Linux (AppImage, .deb, tar.gz) | `~/.local/share/burp-music-video-generator/work/` (or under `$XDG_DATA_HOME`) | `~/Videos/Burp Music Video Generator/` |
+| Linux (Flatpak) | `~/.var/app/com.techdaddydigital.BurpMusicVideoGenerator/data/burp-music-video-generator/work/` | `~/Videos/Burp Music Video Generator/` |
+
+Run from source, the work folder is `burp-work/` (or `--work-dir`) and videos go to
+`outputs/` in the app's GUI, or wherever `--output` says on the command line. Inside
+the work folder, each streamer gets their own folder:
 
 ```text
 burp-work/emmytheaxolotl/
