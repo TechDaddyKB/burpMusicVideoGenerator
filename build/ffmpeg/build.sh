@@ -6,13 +6,13 @@
 #   build/ffmpeg/build.sh <target> <output folder>
 #
 # target: linux-x64 (glibc-linked, everything else static), win-x64 (cross-built on Linux with
-# mingw-w64, fully static) or osx-arm64 (on a Mac). Needs C/C++ compilers, make, nasm, meson,
+# mingw-w64, fully static), osx-arm64 or osx-x64 (on a Mac of that kind). Needs C/C++ compilers, make, nasm, meson,
 # ninja, cmake, pkg-config and curl (and patchelf for linux-x64). Sources are pinned by SHA-256 below.
 #
 # GPU support (each loads the vendor's driver at run time, so nothing GPU-specific is bundled):
 #   linux-x64: NVIDIA NVENC/NVDEC, AMD AMF, Intel Quick Sync (oneVPL), VAAPI (AMD/Intel), Vulkan
 #   win-x64:   NVIDIA NVENC/NVDEC, AMD AMF, Intel Quick Sync (oneVPL), D3D11/DXVA2 decoding, Vulkan
-#   osx-arm64: VideoToolbox
+#   osx-arm64, osx-x64: VideoToolbox
 set -euo pipefail
 
 target=${1:?target}
@@ -55,9 +55,10 @@ case "$target" in
     cflags="-O2"; ldflags="-static"
     x264_host=(--host=x86_64-w64-mingw32 --cross-prefix="$cross")
     selected=("${packages[@]}" "${gpu_packages[@]}") ;;
-  osx-arm64)
-    arch=arm64; os=darwin; cc=clang; cxx=clang++
-    cflags="-O2 -arch arm64 -mmacosx-version-min=11.0"; ldflags="-arch arm64 -mmacosx-version-min=11.0"
+  osx-arm64|osx-x64)
+    [ "$target" = osx-arm64 ] && arch=arm64 || arch=x86_64
+    os=darwin; cc=clang; cxx=clang++
+    cflags="-O2 -arch $arch -mmacosx-version-min=11.0"; ldflags="-arch $arch -mmacosx-version-min=11.0"
     selected=("${packages[@]}") ;;
   *) echo "unknown target $target" >&2; exit 2 ;;
 esac
@@ -169,7 +170,7 @@ case "$target" in
     hw=(--enable-ffnvcodec --enable-nvenc --enable-nvdec --enable-amf --enable-libvpl --enable-d3d11va --enable-dxva2 --enable-vulkan)
     threads=(--enable-w32threads); crossflags=(--enable-cross-compile --cross-prefix="$cross")
     extra_libs="-lstdc++" ;;
-  osx-arm64)
+  osx-*)
     encoders+=(h264_videotoolbox)
     hwaccels=(h264_videotoolbox hevc_videotoolbox)
     hw=(--enable-videotoolbox)
@@ -202,7 +203,7 @@ echo "FFmpeg"
 
 cp "$work/ffmpeg/ffmpeg$exe" "$work/ffmpeg/ffprobe$exe" "$out/"
 case "$target" in
-  osx-arm64) strip "$out/ffmpeg" "$out/ffprobe" ;;
+  osx-*) strip "$out/ffmpeg" "$out/ffprobe" ;;
   *) "${cross}strip" "$out/ffmpeg$exe" "$out/ffprobe$exe" ;;
 esac
 if [ "$target" = linux-x64 ]; then

@@ -4,11 +4,17 @@ name: Release
 #   standard   - the built-in NumPy copy of YAMNet; small.
 #   tensorflow - Google's TensorFlow YAMNet; large, and on Linux it can use an NVIDIA GPU (CUDA).
 # Every build bundles the app's own FFmpeg (build/ffmpeg/build.sh), so users need nothing else installed.
-# Pushing a v* tag publishes a GitHub release; running it by hand only builds the files (as workflow artifacts).
+# Pushing a v* tag publishes a GitHub release; running it by hand only builds the files (as workflow artifacts),
+# unless release_tag names an existing release: then files that release lacks (a new platform) are added to it.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Add files missing from this existing release (e.g. v0.3.2). The app code must match the tag.
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -45,6 +51,7 @@ jobs:
           - { target: linux-x64, os: ubuntu-22.04 }   # oldest supported glibc, so it runs on more distros
           - { target: win-x64, os: ubuntu-24.04 }     # cross-built with mingw-w64
           - { target: osx-arm64, os: macos-latest }
+          - { target: osx-x64, os: macos-15-intel }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -94,11 +101,15 @@ jobs:
       fail-fast: false
       matrix:
         edition: [standard, tensorflow]
-        platform: [linux, windows, macos]
+        platform: [linux, windows, macos, macos-intel]
         include:
           - { platform: linux, os: ubuntu-22.04, ffmpeg: linux-x64 }
           - { platform: windows, os: windows-latest, ffmpeg: win-x64 }
-          - { platform: macos, os: macos-latest, ffmpeg: osx-arm64 }
+          - { platform: macos, os: macos-latest, ffmpeg: osx-arm64, arch: arm64 }
+          - { platform: macos-intel, os: macos-15-intel, ffmpeg: osx-x64, arch: x64 }
+        exclude:
+          # TensorFlow publishes no Intel Mac packages after 2.16.
+          - { platform: macos-intel, edition: tensorflow }
     runs-on: ${{ matrix.os }}
     # Windows code signing (Azure Artifact Signing) trusts only this repository's "signing" environment,
     # which only release tags may use.
@@ -117,8 +128,11 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
       - name: Version
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v=${GITHUB_REF#refs/tags/v}; else v=0.0.0-dev; fi
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v=${GITHUB_REF#refs/tags/v}
+          elif [ -n "$RELEASE_TAG" ]; then v=${RELEASE_TAG#v}; else v=0.0.0-dev; fi
           echo "APP_VERSION=$v" >> "$GITHUB_ENV"
           [ ${{ matrix.edition }} = tensorflow ] && s=-tensorflow || s=
           echo "SUFFIX=$s" >> "$GITHUB_ENV"
@@ -128,6 +142,13 @@ jobs:
           path: ffmpeg-dist
       - name: Restore ffmpeg permissions
         run: chmod +x ffmpeg-dist/ffmpeg* ffmpeg-dist/ffprobe*
+      - name: Use NumPy and SciPy builds for older Intel Macs
+        # On a new macOS, pip picks wheels that need macOS 14; these run on macOS 11 like the rest of the app.
+        if: matrix.platform == 'macos-intel'
+        run: |
+          grep -E '^(numpy|scipy)' requirements.txt | xargs python -m pip download --no-deps --only-binary=:all: \
+            --platform macosx_11_0_x86_64 --python-version "$PYTHON_VERSION" -d old-wheels
+          python -m pip install --no-deps old-wheels/*.whl
       - name: Install Python packages
         run: |
           if [ ${{ matrix.edition }} = tensorflow ]; then req=requirements-tensorflow.txt; else req=requirements.txt; fi
@@ -144,7 +165,7 @@ jobs:
       - name: Check the built app
         run: |
           case ${{ matrix.platform }} in
-            macos) app="dist/Burp Music Video Generator.app/Contents/MacOS/burp-music-video-generator" ;;
+            macos*) app="dist/Burp Music Video Generator.app/Contents/MacOS/burp-music-video-generator" ;;
             windows) app=dist/burp-music-video-generator/burp-music-video-generator.exe ;;
             *) app=dist/burp-music-video-generator/burp-music-video-generator ;;
           esac
@@ -207,13 +228,13 @@ jobs:
 
       # --- macOS: disk image -------------------------------------------------------------------------
       - name: Package (macOS)
-        if: matrix.platform == 'macos'
+        if: startsWith(matrix.platform, 'macos')
         run: |
           mkdir -p out dmg
           cp -R "dist/Burp Music Video Generator.app" dmg/
           ln -s /Applications dmg/Applications
           hdiutil create -volname "Burp Music Video Generator" -srcfolder dmg -ov -format UDZO \
-            "out/burp-music-video-generator-$APP_VERSION-macos-arm64$SUFFIX.dmg"
+            "out/burp-music-video-generator-$APP_VERSION-macos-${{ matrix.arch }}$SUFFIX.dmg"
 
       # --- Linux: tar.gz, AppImage, .deb, Flatpak -----------------------------------------------------
       - name: Package (Linux)
@@ -232,7 +253,7 @@ jobs:
           compression-level: 0
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     needs: app
     runs-on: ubuntu-latest
     permissions:
@@ -241,12 +262,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: release-*
           path: files
           merge-multiple: true
       - name: Publish
+        if: inputs.release_tag == ''
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
@@ -254,3 +277,25 @@ jobs:
           (cd files && sha256sum * > SHA256SUMS.txt)
           sed "s/{{VERSION}}/${TAG#v}/g" build/release-notes.md > notes.md
           gh release create "$TAG" files/* --repo "$GITHUB_REPOSITORY" --title "Burp Music Video Generator $TAG" --notes-file notes.md
+      - name: Add missing files to an existing release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          # Only build changes may differ from the tag, so the new files hold the released app.
+          if ! git diff --quiet "$TAG" HEAD -- . ':!.github' ':!*.md' ':!build/ffmpeg/build.sh'; then
+            echo "The app code differs from $TAG:"; git diff --stat "$TAG" HEAD -- . ':!.github' ':!*.md' ':!build/ffmpeg/build.sh'; exit 1
+          fi
+          mkdir old && gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS.txt --dir old
+          have=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name')
+          new=()
+          for f in files/*; do grep -qxF "$(basename "$f")" <<<"$have" || new+=("$f"); done
+          [ ${#new[@]} -gt 0 ] || { echo "Nothing new to add to $TAG"; exit 0; }
+          printf 'Adding %s\n' "${new[@]}"
+          cp old/SHA256SUMS.txt SHA256SUMS.txt
+          (cd files && sha256sum "${new[@]#files/}") >> SHA256SUMS.txt
+          sed "s/{{VERSION}}/${TAG#v}/g" build/release-notes.md > notes.md
+          gh release upload "$TAG" "${new[@]}" --repo "$GITHUB_REPOSITORY"
+          gh release upload "$TAG" SHA256SUMS.txt --clobber --repo "$GITHUB_REPOSITORY"
+          gh release edit "$TAG" --notes-file notes.md --repo "$GITHUB_REPOSITORY"

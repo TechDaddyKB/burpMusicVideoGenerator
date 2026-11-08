@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Add an Intel Mac download (`macos-x64.dmg`, macOS 11 or later, standard edition
+  only: TensorFlow has no Intel Mac builds after 2.16), also attached to 0.3.2.
+- The release workflow, run by hand with `release_tag`, adds files that an existing
+  release is missing.
+
 ## 0.3.2 — 2026-11-07
 
 - Fix "dict() got multiple values for keyword argument 'quiet'" when downloading a

@@ -6,6 +6,7 @@ The burps are back, and this time they've brought their own FFmpeg. Nothing else
 | --- | --- |
 | Windows 10/11 (64-bit) | `burp-music-video-generator-{{VERSION}}-windows-x64.zip`, unzip, run `burp-music-video-generator.exe` |
 | macOS (Apple silicon) | `burp-music-video-generator-{{VERSION}}-macos-arm64.dmg`, drag to Applications |
+| macOS (Intel), 11 or later | `burp-music-video-generator-{{VERSION}}-macos-x64.dmg`, drag to Applications (standard edition only) |
 | Ubuntu, Debian, Mint, Pop!_OS | `burp-music-video-generator_{{VERSION}}_amd64.deb` |
 | Any Linux, one file | `burp-music-video-generator-{{VERSION}}-linux-x64.AppImage` (mark it executable and run) |
 | Any Linux, sandboxed | `burp-music-video-generator-{{VERSION}}-linux-x64.flatpak` (`flatpak install --user <file>`) |
@@ -13,7 +14,8 @@ The burps are back, and this time they've brought their own FFmpeg. Nothing else
 
 ## Standard or TensorFlow edition?
 
-Every file comes in two editions. **Most people want the standard one** (the files without `-tensorflow`).
+Every file comes in two editions, except Intel Macs, which get standard only (TensorFlow stopped making
+Intel Mac versions). **Most people want the standard one** (the files without `-tensorflow`).
 
 | | Standard | TensorFlow (`-tensorflow`) |
 | --- | --- | --- |

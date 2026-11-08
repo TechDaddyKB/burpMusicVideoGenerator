@@ -28,12 +28,14 @@ burp waiting for its cue.
 | --- | --- |
 | Windows 10/11 | `…-windows-x64.zip`: unzip, run `burp-music-video-generator.exe` |
 | macOS (Apple silicon) | `…-macos-arm64.dmg`: drag to Applications |
+| macOS (Intel), 11 or later | `…-macos-x64.dmg`: drag to Applications |
 | Ubuntu, Debian, Mint, Pop!_OS | `…_amd64.deb` |
 | Any Linux | `…-linux-x64.AppImage` (one file), `.flatpak` (sandboxed) or `.tar.gz` (plain folder) |
 
 ### Standard or TensorFlow edition?
 
 Every download comes in two flavors. **Most people want standard** (no `-tensorflow` in the name).
+Intel Macs get standard only: TensorFlow retired its Intel Mac builds, so those burps travel economy.
 
 | | Standard | TensorFlow |
 | --- | --- | --- |

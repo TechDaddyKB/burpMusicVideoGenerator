@@ -37,9 +37,11 @@ CHANGELOG.md.
 
 Push a tag such as `v0.4.0`. `.github/workflows/release.yml` audits the dependencies,
 builds FFmpeg (cached by the build script's hash), builds both editions for
-Windows, macOS and Linux, checks each one renders a video, signs the Windows files
+Windows, macOS (Apple silicon) and Linux, and the standard edition for Intel Macs, checks each one renders a video, signs the Windows files
 and publishes the GitHub release. Running the workflow by hand builds everything
-without publishing.
+without publishing. To add a new platform to an existing release, run it by hand
+with `release_tag` set (e.g. `v0.3.2`): it uploads only the files that release lacks
+and updates `SHA256SUMS.txt`, and refuses if the app code differs from the tag.
 
 Windows signing uses Azure Artifact Signing through OpenID Connect, in the
 **signing** environment (release tags only). Its variables are the same as Cuebot's
