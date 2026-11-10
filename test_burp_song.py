@@ -107,6 +107,17 @@ class MidiAndAudioTests(FixtureTest):
         peak = np.argmax(np.abs(np.fft.rfft(interior*np.hanning(len(interior)))))
         self.assertAlmostEqual(peak*bs.SR/len(interior), 440, delta=12)
 
+    def test_extreme_notes_stay_in_rubberband_limits(self):
+        # Issue #5: a 20 ms note on a 2.5 s clip needed tempo 127 (Rubber Band allows 0.01 to 100).
+        path = self.tmp/'long.wav'
+        wavfile.write(path, bs.SR, (.5*np.sin(2*math.pi*220*np.arange(5*bs.SR//2)/bs.SR)).astype(np.float32))
+        clip = dict(key='long', wav=str(path), duration=2.5, pitch=57)
+        for duration, pitch in [(.0196, 60), (.00055, 60), (.0001, 60), (300, 60), (1, 127), (1, 0)]:
+            with self.subTest(duration=duration, pitch=pitch):
+                audio = bs.note_audio(dict(duration=duration, pitch=pitch), clip, self.tmp)
+                self.assertEqual(len(audio), round(duration*bs.SR))
+        self.assertEqual(len(bs.note_audio(dict(duration=1e-6, pitch=60), clip, self.tmp)), 0)
+
     def test_make_song_end_to_end(self):
         clip = self.tmp/'clips'/'burp-0001.mp4'
         clip.parent.mkdir()

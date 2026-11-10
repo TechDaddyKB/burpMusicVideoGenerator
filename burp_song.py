@@ -510,11 +510,18 @@ def note_audio(note, clip, cache):
     ratio = 2**((note['pitch']-clip['pitch'])/12)
     key = hashlib.sha256(f"{clip['key']}:{length}:{ratio:.8f}".encode()).hexdigest()[:24]
     path = cache/f'note-{key}.wav'
+    if length < 1:
+        return np.zeros(0, np.float32)
     if not path.exists():
         fade = min(.008, note['duration']/4)
-        filters = (f"rubberband=tempo={clip['duration']/note['duration']:.9f}:pitch={ratio:.9f},"
-                   f"apad,atrim=duration={note['duration']:.9f},"
-                   f"afade=t=in:d={fade},afade=t=out:st={note['duration']-fade}:d={fade}")
+        # Rubber Band takes tempo and pitch from 0.01 to 100. A note too short for its clip even
+        # at 100x plays the clip's start; too long, it's padded with silence. Padding and trimming
+        # count samples (the clip WAV is at SR): a duration that rounds to 0 would pad forever.
+        tempo = min(max(clip['duration']/note['duration'], .01), 100)
+        ratio = min(max(ratio, .01), 100)
+        filters = (f"rubberband=tempo={tempo:.9f}:pitch={ratio:.9f},"
+                   f"apad=whole_len={length},atrim=end_sample={length},"
+                   f"afade=t=in:d={fade:.9f},afade=t=out:st={note['duration']-fade:.9f}:d={fade:.9f}")
         run(['ffmpeg', '-v', 'error', '-y', '-i', clip['wav'], '-af', filters,
              '-ar', str(SR), '-c:a', 'pcm_f32le', str(path)])
     return wavfile.read(path)[1][:length]

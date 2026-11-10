@@ -1,7 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.3.3 — 2026-11-09
 
+- Fix "Value ... for parameter 'tempo' out of range [0.01 - 100]" / "Result too large"
+  ([#5](https://github.com/TechDaddyKB/burpMusicVideoGenerator/issues/5)): very short
+  MIDI notes (grace notes, a few milliseconds) on long clips needed more than Rubber
+  Band's 100x speed-up. Tempo and pitch now stay within its limits, and each note's
+  audio is padded and trimmed by sample count, so it always has exactly the note's length.
 - Add an Intel Mac download (`macos-x64.dmg`, macOS 11 or later, standard edition
   only: TensorFlow has no Intel Mac builds after 2.16), also attached to 0.3.2.
 - The release workflow, run by hand with `release_tag`, adds files that an existing
