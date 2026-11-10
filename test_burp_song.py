@@ -118,6 +118,33 @@ class MidiAndAudioTests(FixtureTest):
                 self.assertEqual(len(audio), round(duration*bs.SR))
         self.assertEqual(len(bs.note_audio(dict(duration=1e-6, pitch=60), clip, self.tmp)), 0)
 
+    def test_drums_get_clips_by_register_at_their_own_speed(self):
+        clips = [dict(duration=.4, pitch=40), dict(duration=.4, pitch=60), dict(duration=.4, pitch=80)]
+
+        def drum(start, key, duration=.01):
+            return dict(start=start, duration=duration, track=0, channel=9, pitch=key, velocity=100)
+        melody = dict(start=0, duration=1, track=0, channel=0, pitch=60, velocity=100)
+        kick, snare, cymbal, again, double = drum(0, 36), drum(0, 38), drum(0, 49), drum(.1, 36), drum(.1, 36)
+        notes = [melody, kick, snare, cymbal, again, double]
+        bs.place_drums(notes, clips)
+        self.assertEqual([kick['clip'], snare['clip'], cymbal['clip']], [0, 1, 2])
+        self.assertEqual(len(notes), 5)  # the doubled kick plays once
+        self.assertNotIn('clip', melody)
+        self.assertAlmostEqual(kick['duration'], .1)    # until the next kick
+        self.assertAlmostEqual(cymbal['duration'], .4)  # the whole clip, not the 10 ms written
+        self.assertEqual((cymbal['pitch'], cymbal['tempo']), (80, 1.0))
+
+    def test_make_song_with_drums(self):
+        clip = self.tmp/'clips'/'burp-0001.mp4'
+        clip.parent.mkdir()
+        shutil.copyfile(self.fixture, clip)
+        midi = save_midi(self.tmp/'drums.mid', [
+            mido.Message('note_on', note=60), mido.Message('note_on', channel=9, note=36),
+            mido.Message('note_off', channel=9, note=36, time=10), mido.Message('note_off', note=60, time=470)])
+        output = self.tmp/'drums.mp4'
+        bs.make_song([clip], midi, output, self.tmp/'cache', drums=True)
+        self.assertTrue(output.stat().st_size > 0)
+
     def test_make_song_end_to_end(self):
         clip = self.tmp/'clips'/'burp-0001.mp4'
         clip.parent.mkdir()
@@ -341,8 +368,11 @@ class GuiFormTests(unittest.TestCase):
         self.assertNotIn('--to-date', argv)
         self.assertNotIn('--all', argv)  # only applies without dates
         self.assertIn('--cpu-only', argv)
+        self.assertNotIn('--drums', argv)
         self.assertEqual(argv[argv.index('--confidence')+1], '0.40')
         bs.parse_args(argv)  # the script accepts what the form builds
+        argv, _ = self.gui.build_argv('x', '', '', .35, str(self.midi), str(self.tmp/'o.mp4'), drums=True)
+        self.assertTrue(bs.parse_args(argv).drums)
 
     def test_form_problems_are_explained(self):
         cases = [('', '', '', 'streamer'), ('x', '10/01/2026', '', 'From date'),

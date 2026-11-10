@@ -504,11 +504,38 @@ def select_clip(note, clips):
                + .025*abs(c['pitch']-note['pitch']))
 
 
+# General MIDI drum keys -> where in the clips' pitch range (0 lowest, 1 highest) that drum goes.
+# Anything not listed (mostly Latin and hand percussion) sits at .7.
+DRUM_REGISTER = {35: 0, 36: 0, 41: .1, 43: .2, 45: .3, 47: .4, 48: .45, 50: .5,
+                 37: .5, 38: .5, 40: .5, 39: .6,
+                 42: .9, 44: .9, 46: .95, 49: 1, 51: .9, 52: 1, 53: .9, 55: 1, 57: 1, 59: .9}
+DRUM_MAX_SECONDS = 1.0
+
+
+def place_drums(notes, clips):
+    """Choose a clip for each drum hit (channel 10) by register, and set the hit's length: the clip
+    plays at its own speed and pitch until it ends, the same drum hits again, or a second passes.
+    A drum doubled at the same instant (often on two tracks) plays once."""
+    pitches = sorted(c['pitch'] for c in clips)
+    following, doubled = {}, set()
+    for n in sorted((n for n in notes if n['channel'] == 9), key=lambda n: n['start'], reverse=True):
+        hit = min(following.get(n['pitch'], math.inf)-n['start'], DRUM_MAX_SECONDS)
+        following[n['pitch']] = n['start']
+        if hit <= 0:
+            doubled.add(id(n))
+            continue
+        target = float(np.quantile(pitches, DRUM_REGISTER.get(n['pitch'], .7)))
+        clip = select_clip(dict(duration=hit, pitch=target), clips)
+        n.update(clip=clips.index(clip), pitch=clip['pitch'], tempo=1.0, duration=min(hit, clip['duration']))
+    notes[:] = [n for n in notes if id(n) not in doubled]
+
+
 def note_audio(note, clip, cache):
-    """Pitch-shift and stretch a clip's audio to one note's pitch and length (cached)."""
+    """Pitch-shift and stretch a clip's audio to one note's pitch and length (cached). A note with
+    a 'tempo' (drums) plays the clip at that speed instead of stretching it to the note's length."""
     length = round(note['duration']*SR)
     ratio = 2**((note['pitch']-clip['pitch'])/12)
-    key = hashlib.sha256(f"{clip['key']}:{length}:{ratio:.8f}".encode()).hexdigest()[:24]
+    key = hashlib.sha256(f"{clip['key']}:{length}:{ratio:.8f}:{note.get('tempo')}".encode()).hexdigest()[:24]
     path = cache/f'note-{key}.wav'
     if length < 1:
         return np.zeros(0, np.float32)
@@ -517,7 +544,7 @@ def note_audio(note, clip, cache):
         # Rubber Band takes tempo and pitch from 0.01 to 100. A note too short for its clip even
         # at 100x plays the clip's start; too long, it's padded with silence. Padding and trimming
         # count samples (the clip WAV is at SR): a duration that rounds to 0 would pad forever.
-        tempo = min(max(clip['duration']/note['duration'], .01), 100)
+        tempo = min(max(note.get('tempo') or clip['duration']/note['duration'], .01), 100)
         ratio = min(max(ratio, .01), 100)
         filters = (f"rubberband=tempo={tempo:.9f}:pitch={ratio:.9f},"
                    f"apad=whole_len={length},atrim=end_sample={length},"
@@ -581,8 +608,9 @@ def render_video(notes, clips, audio_path, output, seconds, cache, encoder=CPU_E
                 for i, n in enumerate(active):
                     clip = clips[n['clip']]
                     source = frames.get(clip)
-                    # Play the clip's video at the same stretched speed as its audio.
-                    source_time = clip['offset']+(t-n['start'])/n['duration']*clip['duration']
+                    # Play the clip's video at the same (stretched) speed as its audio.
+                    speed = n.get('tempo') or clip['duration']/n['duration']
+                    source_time = clip['offset']+(t-n['start'])*speed
                     image = source[min(len(source)-1, int(source_time*FPS))]
                     x0, x1 = (i % cols)*WIDTH//cols, (i % cols+1)*WIDTH//cols
                     y0, y1 = (i//cols)*HEIGHT//rows, (i//cols+1)*HEIGHT//rows
@@ -608,22 +636,26 @@ def render_video(notes, clips, audio_path, output, seconds, cache, encoder=CPU_E
                 proc.wait()
 
 
-def make_song(clip_paths, midi, output, cache, seconds=None, encoder=CPU_ENCODER):
-    notes = midi_notes(midi)
-    end = max((n['start']+n['duration'] for n in notes), default=0)
+def make_song(clip_paths, midi, output, cache, seconds=None, encoder=CPU_ENCODER, drums=False):
+    notes = midi_notes(midi, include_drums=drums)
+    if not notes:
+        raise ValueError(f'No playable notes in {midi}')
+    cache.mkdir(parents=True, exist_ok=True)
+    LOG.info('Analyzing %d clips', len(clip_paths))
+    clips = [analyze_clip(Path(p), cache) for p in clip_paths]
+    place_drums(notes, clips)
+    end = max(n['start']+n['duration'] for n in notes)
     if seconds:
         end = min(end, seconds)
     notes = [dict(n, duration=min(n['start']+n['duration'], end)-n['start'])
              for n in notes if n['start'] < end]
     if not notes:
         raise ValueError(f'No playable notes in {midi}')
-    cache.mkdir(parents=True, exist_ok=True)
-    LOG.info('Analyzing %d clips', len(clip_paths))
-    clips = [analyze_clip(Path(p), cache) for p in clip_paths]
     mix = np.zeros(math.ceil(end*SR), np.float32)
     for i, note in enumerate(notes):
-        clip = select_clip(note, clips)
-        note['clip'] = clips.index(clip)
+        if 'clip' not in note:
+            note['clip'] = clips.index(select_clip(note, clips))
+        clip = clips[note['clip']]
         audio = note_audio(note, clip, cache)
         start = round(note['start']*SR)
         length = min(len(audio), len(mix)-start)
@@ -674,6 +706,8 @@ def parse_args(argv=None):
     p.add_argument('--engine', choices=ENGINES, default='auto',
                    help='Sound detector: the built-in NumPy copy of YAMNet, or TensorFlow '
                         '(auto: TensorFlow if installed)')
+    p.add_argument('--drums', action='store_true',
+                   help='Also play the percussion (MIDI channel 10), each drum with a clip in its register')
     p.add_argument('--cpu-only', action='store_true',
                    help='Encode video on the CPU even if a GPU encoder is available')
     p.add_argument('--cookies-from-browser', choices=['firefox', 'chrome', 'chromium', 'brave', 'opera', 'edge'],
@@ -741,7 +775,7 @@ def main(argv=None):
     if not clips:
         raise ValueError('No clips found, so there is nothing to play. '
                          'Try other dates, other sounds or a lower --confidence.')
-    make_song(clips, args.midi, args.output, root/'cache', args.seconds, encoder)
+    make_song(clips, args.midi, args.output, root/'cache', args.seconds, encoder, args.drums)
 
 
 if __name__ == '__main__':

@@ -48,7 +48,7 @@ WORK_DIR, OUTPUT_DIR = user_folders()
 
 
 def build_argv(username, from_date, to_date, confidence, midi, output, download_all=False, cpu_only=False,
-               sounds=(bs.DEFAULT_SOUND,)):
+               sounds=(bs.DEFAULT_SOUND,), drums=False):
     """Check the form and turn it into burp_song.py arguments. Raises ValueError with a friendly message."""
     username = username.strip().lower()
     if not username:
@@ -84,6 +84,8 @@ def build_argv(username, from_date, to_date, confidence, midi, output, download_
         argv.append('--all')
     for sound in sorted(sounds):
         argv += ['--sound', sound]
+    if drums:
+        argv.append('--drums')
     if cpu_only:
         argv.append('--cpu-only')
     return argv, output
@@ -222,6 +224,10 @@ class App:
         ttk.Label(box, text='Save video as').grid(row=1, column=0, sticky='w', pady=(6, 0))
         ttk.Entry(box, textvariable=self.output_path).grid(row=1, column=1, sticky='ew', padx=6, pady=(6, 0))
         ttk.Button(box, text='Choose…', command=self.choose_output).grid(row=1, column=2, pady=(6, 0))
+        self.drums = tk.BooleanVar()
+        ttk.Checkbutton(box, text='Play the drums too (each drum gets a clip that suits it: low clips '
+                        'for kicks, high ones for cymbals)', variable=self.drums
+                        ).grid(row=2, column=0, columnspan=3, sticky='w', pady=(6, 0))
 
         # Encoder, start button, progress
         row = ttk.Frame(frame)
@@ -375,7 +381,8 @@ class App:
         try:
             argv, output = build_argv(self.streamer.get(), self.from_date.get(), self.to_date.get(),
                                       self.confidence.get(), self.midi.get(), self.output_path.get(),
-                                      self.download_all.get(), self.cpu_only.get(), sorted(self.sounds))
+                                      self.download_all.get(), self.cpu_only.get(), sorted(self.sounds),
+                                      self.drums.get())
         except ValueError as exc:
             messagebox.showwarning('Almost there', str(exc), parent=self.root)
             return

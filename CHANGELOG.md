@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.0 — 2026-11-09
+
+- Add **Play the drums too** in the app and `--drums` on the command line: MIDI
+  percussion (channel 10), which was always skipped, is played too. Each drum gets
+  the clip that fits it best: kicks and low toms take your lowest-pitched clips,
+  snares the middle ones, hi-hats and cymbals the highest. A hit plays its clip at
+  the clip's own pitch and speed until the clip ends, the same drum hits again, or a
+  second passes.
+- Retry creating the macOS disk image when the build machine reports "Resource busy".
+
 ## 0.3.3 — 2026-11-09
 
 - Fix "Value ... for parameter 'tempo' out of range [0.01 - 100]" / "Result too large"

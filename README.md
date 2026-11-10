@@ -72,7 +72,8 @@ It's the same burp either way; one just arrives in a bigger truck.
 
 Search for a streamer and click them, choose the sounds to detect (burps are already
 selected), optionally set a date range, drag the confidence slider, choose a MIDI file
-and where to save the video, then press **Make the video**. The log shows progress,
+and where to save the video (tick **Play the drums too** for a burp drum kit), then press
+**Make the video**. The log shows progress,
 and **Play video** opens the result.
 
 Downloads save videos to your Videos folder (Movies on a Mac) and keep clips in your
@@ -161,6 +162,7 @@ python burp_song.py emmytheaxolotl --midi another-song.mid --output encore.mp4
 | `--seconds N` | Render only the first N seconds, for a quick preview. |
 | `--work-dir DIR` | Where clips, the VOD being processed, and caches go (default `burp-work`). |
 | `--engine NAME` | `numpy`, `tensorflow`, or `auto` (TensorFlow if installed). |
+| `--drums` | Also play the percussion (MIDI channel 10). Each drum gets a clip from its part of your clips' range (kicks the lowest, cymbals the highest), played at its own pitch and speed. |
 | `--cpu-only` | Encode video on the CPU even when a GPU encoder is available. |
 | `--cookies-from-browser NAME` | Use your browser's Twitch login, for subscriber-only VODs. |
 
@@ -210,8 +212,9 @@ rendering. Keep the `clips` folder: it's what future songs are made from.
   not true probabilities. Science marches on; so does indigestion.
 - Each clip gets one estimated pitch, so a wandering burp stays a wandering burp.
 - Big pitch shifts or stretches can sound rough.
-- MIDI drums (channel 10) are skipped, and instrument sounds, pitch bends and
-  expression aren't reproduced.
+- MIDI drums (channel 10) are skipped unless you tick **Play the drums too** (`--drums`).
+  Drums written on another channel are played as ordinary notes. Instrument sounds,
+  pitch bends and expression aren't reproduced.
 - Anything already on screen in the broadcast (chat, game HUDs) stays in the video.
 
 This is a burp orchestra, not the Vienna Philharmonic with a stomach ache.
