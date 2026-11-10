@@ -233,8 +233,13 @@ jobs:
           mkdir -p out dmg
           cp -R "dist/Burp Music Video Generator.app" dmg/
           ln -s /Applications dmg/Applications
-          hdiutil create -volname "Burp Music Video Generator" -srcfolder dmg -ov -format UDZO \
-            "out/burp-music-video-generator-$APP_VERSION-macos-${{ matrix.arch }}$SUFFIX.dmg"
+          # hdiutil sometimes fails with "Resource busy" on hosted runners; try again before giving up.
+          for attempt in 1 2 3 4 5; do
+            hdiutil create -volname "Burp Music Video Generator" -srcfolder dmg -ov -format UDZO \
+              "out/burp-music-video-generator-$APP_VERSION-macos-${{ matrix.arch }}$SUFFIX.dmg" && break
+            [ $attempt = 5 ] && exit 1
+            sleep $((attempt * 10))
+          done
 
       # --- Linux: tar.gz, AppImage, .deb, Flatpak -----------------------------------------------------
       - name: Package (Linux)
